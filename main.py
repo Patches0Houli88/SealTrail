@@ -6,20 +6,24 @@ import os
 from yaml.loader import SafeLoader
 
 # Load config
-with open('config.yaml') as file:
-    config = yaml.load(file, Loader=SafeLoader)
+def load_config():
+    with open('config.yaml') as file:
+        return yaml.load(file, Loader=SafeLoader)
 
+config = load_config()
 authenticator = stauth.Authenticate(
-    config['credentials'], config['cookie']['name'],
-    config['cookie']['key'], config['cookie']['expiry_days']
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days']
 )
 
-name, auth_status, username = authenticator.login('Login', 'main')
+name, auth_status, username = authenticator.login('Login', location='main')
 
 if auth_status:
     authenticator.logout("Logout", "sidebar")
     st.sidebar.title(f"Welcome, {name}")
-    
+
     user_dir = f"data/{username}"
     os.makedirs(user_dir, exist_ok=True)
 
@@ -35,7 +39,7 @@ if auth_status:
     elif dashboard_choice:
         st.session_state.db_path = f"{user_dir}/{dashboard_choice}.db"
         st.success(f"Loaded dashboard: {dashboard_choice}")
-        # Jump to next app module or page here
+        # You can redirect to dashboard.py logic here or use multipage setup
 
 elif auth_status is False:
     st.error("Incorrect username or password.")
