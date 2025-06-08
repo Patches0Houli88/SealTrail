@@ -6,3 +6,4 @@ streamlit-webrtc
 pyzbar
 opencv-python-headless
 pandas
+Authlib>=1.3.2
