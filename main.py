@@ -30,8 +30,12 @@ st.subheader("📁 Upload Inventory CSV")
 uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    st.session_state.uploaded_df = df
-    st.success(f"Uploaded {len(df)} rows.")
+
+    # Save to SQLite
+    conn = sqlite3.connect(st.session_state.db_path)
+    df.to_sql("equipment", conn, if_exists="replace", index=False)
+    conn.commit()
+    conn.close()
+
+    st.success(f"Uploaded and saved {len(df)} rows to database.")
     st.dataframe(df)
-else:
-    st.info("Upload a CSV to preview inventory data.")
