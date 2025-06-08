@@ -10,8 +10,8 @@ if not st.user.is_logged_in:
     st.stop()
 
 # --- User Info + Logout ---
-st.sidebar.markdown(f"Logged in as: {st.user.name}")
-st.sidebar.markdown(f"Email: {st.user.email}")
+st.sidebar.markdown(f"Logged in as: {st.user.get('name', 'Unknown')}")
+st.sidebar.markdown(f"Email: {st.user.get('email', 'unknown@example.com')}")
 if st.sidebar.button("Logout"):
     st.logout()
 
@@ -21,7 +21,7 @@ if os.path.exists("roles.yaml"):
     with open("roles.yaml") as f:
         roles_config = yaml.safe_load(f)
 
-user_email = st.user.email
+user_email = st.user.get("email", "unknown@example.com")
 st.session_state.user_email = user_email
 user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
 allowed_dbs = roles_config.get("users", {}).get(user_email, {}).get("allowed_dbs", [])
