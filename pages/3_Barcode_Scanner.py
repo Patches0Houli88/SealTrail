@@ -3,7 +3,7 @@ from streamlit_qrcode_scanner import qrcode_scanner
 import sqlite3
 import pandas as pd
 
-st.title("📷 Barcode Scanner")
+st.title("Barcode Scanner")
 
 if "db_path" not in st.session_state:
     st.warning("Please log in from the homepage.")
@@ -12,7 +12,7 @@ if "db_path" not in st.session_state:
 st.markdown("Activate your scanner below or use the input as a fallback. If using a webcam, make sure browser permissions are granted.")
 
 # Activation button
-activate_scan = st.button("📷 Start Scanner")
+activate_scan = st.button("Start Scanner")
 
 barcode = None
 
@@ -22,7 +22,7 @@ if activate_scan:
         st.success(f"Scanned: {scanned_code}")
         barcode = scanned_code
     else:
-        st.info("📷 Waiting for camera input...")
+        st.info("Waiting for camera input...")
 
 # Manual fallback
 manual_code = st.text_input("Or manually enter barcode")
@@ -35,7 +35,7 @@ if barcode:
     conn.close()
 
     if not df.empty:
-        st.write("✅ Matching Equipment Found:")
+        st.write("Matching Equipment Found:")
         st.dataframe(df)
     else:
-        st.warning("❌ No matching equipment found.")
+        st.warning("No matching equipment found.")
