@@ -1,47 +1,31 @@
 import streamlit as st
-import streamlit_authenticator as stauth
-import yaml
-import sqlite3
 import os
-from yaml.loader import SafeLoader
 
-# Load config
-def load_config():
-    with open('config.yaml') as file:
-        return yaml.load(file, Loader=SafeLoader)
+# --- Native OIDC Authentication ---
+if not st.user.is_logged_in:
+    st.button("🔐 Log in with Google", on_click=st.login)
+    st.stop()
 
-config = load_config()
-authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
-)
+# --- Show user info and logout ---
+st.sidebar.markdown(f"👤 Logged in as: `{st.user.name}`")
+st.sidebar.markdown(f"📧 {st.user.email}")
+if st.sidebar.button("Logout"):
+    st.logout()
 
-name, auth_status, username = authenticator.login(location='main', form_name='Login')
+# --- Set up user-specific directory and default dashboard DB ---
+user_dir = f"data/{st.user.email.replace('@', '_at_')}"
+os.makedirs(user_dir, exist_ok=True)
 
-if auth_status:
-    authenticator.logout("Logout", "sidebar")
-    st.sidebar.title(f"Welcome, {name}")
+default_db = f"{user_dir}/default_dashboard.db"
+if "db_path" not in st.session_state:
+    st.session_state.db_path = default_db
+    if not os.path.exists(default_db):
+        open(default_db, "w").close()
 
-    user_dir = f"data/{username}"
-    os.makedirs(user_dir, exist_ok=True)
+# --- Load dashboard or app logic ---
+st.title("📦 Equipment & Inventory Tracking System")
+st.success("Dashboard loaded.")
 
-    # List dashboards
-    dashboards = [f.replace(".db", "") for f in os.listdir(user_dir) if f.endswith(".db")]
-    dashboard_choice = st.selectbox("Select Dashboard", dashboards + ["➕ Create New"])
-
-    if dashboard_choice == "➕ Create New":
-        new_name = st.text_input("New dashboard name")
-        if st.button("Create"):
-            open(f"{user_dir}/{new_name}.db", "w").close()
-            st.success("Dashboard created. Reload to see it.")
-    elif dashboard_choice:
-        st.session_state.db_path = f"{user_dir}/{dashboard_choice}.db"
-        st.success(f"Loaded dashboard: {dashboard_choice}")
-        # You can redirect to dashboard.py logic here or use multipage setup
-
-elif auth_status is False:
-    st.error("Incorrect username or password.")
-elif auth_status is None:
-    st.warning("Please enter your credentials.")
+# You can import or include your main dashboard logic here, e.g.:
+# from dashboard import load_dashboard
+# load_dashboard(st.session_state.db_path)
