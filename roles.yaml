@@ -1,0 +1,8 @@
+users:
+  youremail@example.com:
+    role: admin
+    allowed_dbs: ["all"]
+
+  technician@example.com:
+    role: viewer
+    allowed_dbs: ["field_equipment.db", "laptops.db"]
