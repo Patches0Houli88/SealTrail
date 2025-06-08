@@ -22,11 +22,12 @@ if os.path.exists("roles.yaml"):
         roles_config = yaml.safe_load(f)
 
 user_email = st.user.email
+st.session_state.user_email = user_email
 user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
 allowed_dbs = roles_config.get("users", {}).get(user_email, {}).get("allowed_dbs", [])
 
 # --- User Directory ---
-user_dir = f"data/{st.user.email.replace('@', '_at_')}"
+user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
 
 # --- Select or Create Database ---
@@ -35,8 +36,10 @@ if allowed_dbs != ["all"]:
     db_files = [db for db in db_files if db in allowed_dbs]
 
 st.sidebar.write(f"Role: {user_role.capitalize()}")
-st.subheader("Select or Create Equipment Database")
-selected_db = st.selectbox("Choose a database to work with", db_files)
+
+selected_db = None
+if db_files:
+    selected_db = st.selectbox("Choose a database to work with", db_files)
 
 new_db_name = st.text_input("Or create a new database", placeholder="example: laptops.db")
 
@@ -51,7 +54,7 @@ if new_db_name:
         selected_db = new_db_name
 
 # Optional: delete and rename functionality for admins only
-if user_role == "admin":
+if user_role == "admin" and selected_db:
     with st.expander("Manage Databases"):
         db_to_delete = st.selectbox("Delete database", [f for f in db_files if f != selected_db])
         if st.button("Delete Selected DB"):
@@ -69,9 +72,13 @@ if user_role == "admin":
             else:
                 st.warning("A database with that name already exists.")
 
-# Set session DB path
-st.session_state.db_path = os.path.join(user_dir, selected_db)
-st.markdown(f"Current DB: `{selected_db}`")
+# Ensure a valid database is selected
+if selected_db:
+    st.session_state.db_path = os.path.join(user_dir, selected_db)
+    st.markdown(f"Current DB: `{selected_db}`")
+else:
+    st.warning("No database selected or available.")
+    st.stop()
 
 # --- App Body ---
 st.title("Equipment & Inventory Tracking System")
