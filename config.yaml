@@ -1,0 +1,14 @@
+credentials:
+  usernames:
+    alice:
+      email: alice@email.com
+      name: Alice
+      password: 'pbkdf2:sha256:260000$...'
+    bob:
+      email: bob@email.com
+      name: Bob
+      password: 'pbkdf2:sha256:260000$...'
+cookie:
+  expiry_days: 30
+  key: 'inventorykey'
+  name: 'inv_cookie'
