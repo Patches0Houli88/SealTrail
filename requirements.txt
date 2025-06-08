@@ -1,9 +1,11 @@
-streamlit
 streamlit-authenticator
 pyyaml
 altair
+streamlit
+Authlib>=1.3.2
+pandas
+altair
+sqlite3
 streamlit-webrtc
 pyzbar
 opencv-python-headless
-pandas
-Authlib>=1.3.2
