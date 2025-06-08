@@ -1,0 +1,12 @@
+# Ignore all SQLite database files
+*.db
+
+# Ignore user-generated data
+data/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Optional: Ignore Jupyter notebooks (if you use them locally)
+*.ipynb
