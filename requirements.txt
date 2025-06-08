@@ -1,0 +1,8 @@
+streamlit
+streamlit-authenticator
+pyyaml
+altair
+streamlit-webrtc
+pyzbar
+opencv-python-headless
+pandas
