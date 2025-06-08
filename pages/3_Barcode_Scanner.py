@@ -1,28 +1,25 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
-import cv2
-import numpy as np
-from pyzbar import pyzbar
+from streamlit_qrcode_scanner import qrcode_scanner
 
 st.title("📷 Barcode Scanner")
 
 if "db_path" not in st.session_state:
-    st.warning("🔐 Please log in first from the homepage.")
+    st.warning("Please log in from the homepage.")
     st.stop()
 
-class BarcodeScanner(VideoTransformerBase):
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        decoded = pyzbar.decode(img)
-        for obj in decoded:
-            pts = np.array([(pt.x, pt.y) for pt in obj.polygon], np.int32)
-            cv2.polylines(img, [pts], True, (0, 255, 0), 2)
-            barcode_text = obj.data.decode("utf-8")
-            cv2.putText(img, barcode_text, (pts[0][0], pts[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-            st.session_state.last_scanned = barcode_text
-        return img
+code = qrcode_scanner()
 
-webrtc_streamer(key="scanner", video_processor_factory=BarcodeScanner)
+if code:
+    st.success(f"Scanned: {code}")
 
-if "last_scanned" in st.session_state:
-    st.success(f"Scanned: {st.session_state.last_scanned}")
+    # Optional: lookup in database
+    import sqlite3
+    import pandas as pd
+    conn = sqlite3.connect(st.session_state.db_path)
+    df = pd.read_sql("SELECT * FROM equipment WHERE serial_number = ?", conn, params=(code,))
+    conn.close()
+
+    if not df.empty:
+        st.write("Matching Equipment Found:", df)
+    else:
+        st.warning("No matching equipment found.")
