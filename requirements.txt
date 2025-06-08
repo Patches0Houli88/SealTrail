@@ -5,3 +5,4 @@ pandas
 altair
 streamlit-qrcode-scanner
 opencv-python-headless
+PyYAML
