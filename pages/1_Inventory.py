@@ -25,17 +25,28 @@ df = load_data()
 # --- Add New Inventory Item ---
 st.subheader("Add New Item")
 with st.form("add_form"):
-    columns = ["name", "type", "status", "location", "serial"]
-    inputs = {}
-    col_layout = st.columns(len(columns))
-    for i, col in enumerate(columns):
-        inputs[col] = col_layout[i].text_input(col.capitalize())
+    if df.empty:
+        st.info("No data found in inventory table to infer columns.")
+        st.stop()
+
+    col_names = df.columns.drop("rowid")
+    new_values = {}
+    col_layout = st.columns(len(col_names))
+
+    for i, col in enumerate(col_names):
+        unique_vals = df[col].dropna().unique().tolist()
+        if 1 < len(unique_vals) < 20:
+            new_values[col] = col_layout[i].selectbox(col, unique_vals + ["<Other>"])
+            if new_values[col] == "<Other>":
+                new_values[col] = col_layout[i].text_input(f"Enter custom {col}")
+        else:
+            new_values[col] = col_layout[i].text_input(col)
 
     submitted = st.form_submit_button("Add to Inventory")
     if submitted:
-        values = tuple(inputs[col] for col in columns)
+        values = tuple(new_values[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
-        sql = f"INSERT INTO equipment ({', '.join(columns)}) VALUES ({placeholders})"
+        sql = f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})"
         cursor.execute(sql, values)
         conn.commit()
         st.success("Item added!")
