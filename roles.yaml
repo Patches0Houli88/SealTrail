@@ -1,5 +1,5 @@
 users:
-  youremail@example.com:
+  wagrato@gmail.com:
     role: admin
     allowed_dbs: ["all"]
 
