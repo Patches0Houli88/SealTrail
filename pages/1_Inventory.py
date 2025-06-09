@@ -13,17 +13,16 @@ if "db_path" not in st.session_state:
 conn = sqlite3.connect(st.session_state.db_path)
 cursor = conn.cursor()
 
-# Load existing data
+# Load data
 def load_data():
     try:
-        df = pd.read_sql("SELECT rowid, * FROM equipment", conn)
-        return df
-    except Exception:
+        return pd.read_sql("SELECT rowid, * FROM equipment", conn)
+    except:
         return pd.DataFrame()
 
 df = load_data()
 
-# --- Add Column (Admin Only) ---
+# --- Admin-only: Add Column ---
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.get("user_role", "guest")
 
@@ -35,22 +34,21 @@ if user_role == "admin":
         if st.button("Add Column", key="add_column_btn") and new_col_name:
             try:
                 cursor.execute(f"ALTER TABLE equipment ADD COLUMN {new_col_name} {col_type}")
-                # Log audit
-                timestamp = datetime.utcnow().isoformat()
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         timestamp TEXT, action TEXT, user TEXT, detail TEXT
                     )
                 """)
-                cursor.execute("INSERT INTO audit_log VALUES (?, ?, ?, ?)", 
-                    (timestamp, "Add Column", user_email, f"{new_col_name} ({col_type})"))
+                timestamp = datetime.utcnow().isoformat()
+                cursor.execute("INSERT INTO audit_log VALUES (?, ?, ?, ?)",
+                               (timestamp, "Add Column", user_email, f"{new_col_name} ({col_type})"))
                 conn.commit()
                 st.success(f"Column `{new_col_name}` added.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Error adding column: {e}")
 
-# --- Add New Inventory Item ---
+# --- Add New Item ---
 st.subheader("Add New Item")
 with st.form("add_form"):
     if df.empty:
@@ -70,8 +68,7 @@ with st.form("add_form"):
         else:
             new_values[col] = col_layout[i].text_input(col, key=f"text_{col}")
 
-    submitted = st.form_submit_button("Add to Inventory")
-    if submitted:
+    if st.form_submit_button("Add to Inventory"):
         values = tuple(new_values[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
         sql = f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})"
@@ -80,11 +77,9 @@ with st.form("add_form"):
         st.success("Item added!")
         st.rerun()
 
-# --- Edit Inventory ---
+# --- Edit Items ---
 st.subheader("Edit Items")
-if df.empty:
-    st.info("No data available to edit.")
-else:
+if not df.empty:
     st.markdown("### Filter Inventory")
     filter_col = st.selectbox("Select column to filter by", df.columns.drop("rowid"), key="filter_col")
     filter_value = st.text_input("Filter value contains:", key="filter_val")
@@ -94,14 +89,24 @@ else:
     else:
         filtered_df = df.copy()
 
+    # Assign compatible widgets
+    column_config = {}
+    for col in filtered_df.columns:
+        if col == "rowid":
+            continue
+        if pd.api.types.is_integer_dtype(filtered_df[col]):
+            column_config[col] = st.column_config.NumberColumn(col)
+        elif pd.api.types.is_float_dtype(filtered_df[col]):
+            column_config[col] = st.column_config.NumberColumn(col, format="%.2f")
+        else:
+            column_config[col] = st.column_config.TextColumn(col)
+
     editable_df = st.data_editor(
         filtered_df.drop(columns="rowid"),
+        column_config=column_config,
         num_rows="dynamic",
         use_container_width=True,
-        key="editor",
-        column_config={
-            col: st.column_config.TextColumn(col, width="medium") for col in filtered_df.columns if col != "rowid"
-        }
+        key="editor"
     )
 
     if st.button("Save Changes"):
