@@ -112,7 +112,7 @@ start_date = st.sidebar.date_input("Start Date", datetime.today().replace(day=1)
 end_date = st.sidebar.date_input("End Date", datetime.today())
 
 if st.sidebar.checkbox("🔄 Auto Refresh"):
-    st.experimental_rerun()
+    st.rerun()
 
 # --- KPI Cards ---
 if st.session_state.visible_widgets.get("kpis"):
