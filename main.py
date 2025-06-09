@@ -42,8 +42,6 @@ if db_files:
     selected_db = st.selectbox("Choose a database to work with", db_files, index=0)
     if selected_db:
         st.session_state.selected_db = selected_db
-    if selected_db:
-        st.session_state.selected_db = selected_db
 
 new_db_name = st.text_input("Or create a new database", placeholder="example: laptops.db")
 
@@ -56,6 +54,7 @@ if new_db_name:
         st.success(f"Created new database: {new_db_name}")
         db_files.append(new_db_name)
         selected_db = new_db_name
+        st.session_state.selected_db = selected_db
 
 # Optional: delete and rename functionality for admins only
 if user_role == "admin" and selected_db:
@@ -73,17 +72,17 @@ if user_role == "admin" and selected_db:
                 os.rename(old_path, new_path)
                 st.success(f"Renamed to {rename_db}.db. Refresh to use new name.")
                 selected_db = rename_db + ".db"
+                st.session_state.selected_db = selected_db
             else:
                 st.warning("A database with that name already exists.")
 
 # Ensure a valid database is selected
-if selected_db:
-    selected_db = st.session_state.get("selected_db", selected_db)
-    st.session_state.db_path = os.path.join(user_dir, selected_db)
-    st.markdown(f"Current DB: `{selected_db}`")
-else:
+if "selected_db" not in st.session_state:
     st.warning("No database selected or available.")
     st.stop()
+
+st.session_state.db_path = os.path.join(user_dir, st.session_state.selected_db)
+st.markdown(f"Current DB: `{st.session_state.selected_db}`")
 
 # --- App Body ---
 st.title("Equipment & Inventory Tracking System")
@@ -95,10 +94,7 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
 
     # Save to SQLite immediately
-    if "db_path" not in st.session_state:
-    st.warning("Database path not set. Please select a database.")
-    st.stop()
-conn = sqlite3.connect(st.session_state.db_path)
+    conn = sqlite3.connect(st.session_state.db_path)
     conn.execute("""
     CREATE TABLE IF NOT EXISTS equipment (
         equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +125,9 @@ conn = sqlite3.connect(st.session_state.db_path)
     conn.close()
 else:
     # Show existing data if available
+    if "db_path" not in st.session_state:
+        st.warning("Database path not set. Please select a database.")
+        st.stop()
     conn = sqlite3.connect(st.session_state.db_path)
     try:
         existing_df = pd.read_sql("SELECT * FROM equipment", conn)
