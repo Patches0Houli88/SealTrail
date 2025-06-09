@@ -30,12 +30,20 @@ allowed_dbs = roles_config.get("users", {}).get(user_email, {}).get("allowed_dbs
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
 
-# --- Refresh DB list
-db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
+# --- Sidebar: Select or Create Database ---
+st.sidebar.write(f"Role: {user_role.capitalize()}")
+db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
 if allowed_dbs != ["all"]:
     db_files = [db for db in db_files if db in allowed_dbs]
 
-# --- Create new DB ---
+# Dropdown to choose DB
+if db_files:
+    selected_db = st.sidebar.selectbox("Choose a database", db_files)
+    st.session_state.selected_db = selected_db
+else:
+    st.sidebar.warning("No databases found. Create one below.")
+
+# Create DB
 new_db_name = st.sidebar.text_input("Create new database", placeholder="example: laptops.db")
 if st.sidebar.button("Create DB") and new_db_name:
     if not new_db_name.endswith(".db"):
@@ -43,116 +51,74 @@ if st.sidebar.button("Create DB") and new_db_name:
     full_path = os.path.join(user_dir, new_db_name)
     if not os.path.exists(full_path):
         open(full_path, "w").close()
+        st.success(f"Created: {new_db_name}")
         st.session_state.selected_db = new_db_name
-        st.success(f"Created new database: {new_db_name}")
         st.rerun()
     else:
-        st.warning("A database with that name already exists.")
+        st.sidebar.error("Database already exists.")
 
-# --- Choose existing DB
-if db_files:
-    current_selection = st.session_state.get("selected_db", db_files[0])
-    selected_db = st.sidebar.selectbox("Choose a database", db_files, index=db_files.index(current_selection) if current_selection in db_files else 0)
-    st.session_state.selected_db = selected_db
-else:
-    st.sidebar.warning("No databases available. Please create one.")
+# --- Main Section ---
+if "selected_db" not in st.session_state:
+    st.warning("No database selected.")
     st.stop()
 
-# --- Admin: Delete / Rename ---
-if user_role == "admin":
-    with st.sidebar.expander("Manage Databases"):
-        db_to_delete = st.selectbox("Delete database", [f for f in db_files if f != st.session_state.selected_db])
-        if st.button("Delete Selected DB"):
-            os.remove(os.path.join(user_dir, db_to_delete))
-            st.success(f"Deleted {db_to_delete}")
-            st.rerun()
-
-        rename_db = st.text_input("Rename current database", value=st.session_state.selected_db.replace(".db", ""))
-        if st.button("Rename DB") and rename_db:
-            new_path = os.path.join(user_dir, rename_db + ".db")
-            old_path = os.path.join(user_dir, st.session_state.selected_db)
-            if not os.path.exists(new_path):
-                os.rename(old_path, new_path)
-                st.session_state.selected_db = rename_db + ".db"
-                st.success("Renamed database.")
-                st.rerun()
-            else:
-                st.warning("A database with that name already exists.")
-
-# --- Active DB Path ---
-st.session_state.db_path = os.path.join(user_dir, st.session_state.selected_db)
-st.markdown(f"**Current DB:** `{st.session_state.selected_db}`")
+db_path = os.path.join(user_dir, st.session_state.selected_db)
+st.session_state.db_path = db_path
 st.title("Equipment & Inventory Tracking System")
+st.markdown(f"**Current DB**: `{st.session_state.selected_db}`")
 
-# --- Upload Inventory File ---
+# Upload inventory
 st.subheader("Upload Inventory File")
-uploaded_file = st.file_uploader("Upload inventory data", type=["csv", "xlsx", "xls", "tsv", "json"])
+uploaded_file = st.file_uploader("Upload CSV, Excel, JSON or TSV", type=["csv", "xlsx", "xls", "tsv", "json"])
 if uploaded_file:
-    file_type = uploaded_file.name.split(".")[-1].lower()
     try:
-        if file_type == "csv":
+        ext = uploaded_file.name.split(".")[-1].lower()
+        if ext == "csv":
             df = pd.read_csv(uploaded_file)
-        elif file_type == "tsv":
+        elif ext == "tsv":
             df = pd.read_csv(uploaded_file, sep="\t")
-        elif file_type in ["xlsx", "xls"]:
+        elif ext in ["xlsx", "xls"]:
             df = pd.read_excel(uploaded_file)
-        elif file_type == "json":
+        elif ext == "json":
             df = pd.read_json(uploaded_file)
         else:
             st.error("Unsupported file type.")
             st.stop()
 
-        conn = sqlite3.connect(st.session_state.db_path)
-        df.to_sql("equipment", conn, if_exists="replace", index=False)
-        conn.commit()
-        conn.close()
-
-        st.success(f"Uploaded and saved {len(df)} rows to the database.")
         st.dataframe(df)
 
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Inventory as CSV", csv, "inventory_export.csv", mime="text/csv")
-
         if st.button("Save to DB"):
-            conn = sqlite3.connect(st.session_state.db_path)
-            df.to_sql("equipment", conn, if_exists="replace", index=False)
-            conn.commit()
-            conn.close()
-            st.success("Data manually saved.")
+            with sqlite3.connect(db_path) as conn:
+                df.to_sql("equipment", conn, if_exists="replace", index=False)
+            st.success("Saved to DB.")
 
     except Exception as e:
-        st.error(f"Upload failed: {e}")
+        st.error(f"Error processing file: {e}")
 
-else:
-    try:
-        conn = sqlite3.connect(st.session_state.db_path)
-        df = pd.read_sql("SELECT * FROM equipment", conn)
-        if not df.empty:
-            st.subheader("Existing Inventory Data")
-            st.dataframe(df)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download Inventory", csv, "inventory_export.csv", mime="text/csv")
-        conn.close()
-    except:
-        st.info("No inventory found in this database.")
+# Load and display saved inventory
+try:
+    with sqlite3.connect(db_path) as conn:
+        existing_df = pd.read_sql("SELECT * FROM equipment", conn)
+        if not existing_df.empty:
+            st.subheader("Current Inventory")
+            st.dataframe(existing_df)
+except:
+    st.info("No inventory data found.")
 
-# --- Dashboard Summary ---
-st.subheader("📊 Quick Dashboard")
-with sqlite3.connect(st.session_state.db_path) as conn:
+# Condensed Dashboard
+st.subheader("📊 Dashboard Summary")
+with sqlite3.connect(db_path) as conn:
     try:
-        items_df = pd.read_sql("SELECT * FROM equipment", conn)
-        st.metric("Inventory Items", len(items_df))
+        st.metric("Inventory Items", pd.read_sql("SELECT COUNT(*) as count FROM equipment", conn)["count"][0])
     except:
-        st.info("No inventory data.")
+        st.metric("Inventory Items", 0)
 
     try:
-        logs_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
-        st.metric("Maintenance Logs", len(logs_df))
+        st.metric("Maintenance Logs", pd.read_sql("SELECT COUNT(*) as count FROM maintenance_log", conn)["count"][0])
     except:
-        st.info("No maintenance logs.")
+        st.metric("Maintenance Logs", 0)
 
     try:
-        scans_df = pd.read_sql("SELECT * FROM scanned_items", conn)
-        st.metric("Barcode Scans", len(scans_df))
+        st.metric("Barcode Scans", pd.read_sql("SELECT COUNT(*) as count FROM scanned_items", conn)["count"][0])
     except:
-        st.info("No scan data.")
+        st.metric("Barcode Scans", 0)
