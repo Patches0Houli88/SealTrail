@@ -3,7 +3,15 @@ import sqlite3
 import pandas as pd
 
 st.title("Maintenance Log")
+# --- Get user role and email ---
+user_email = st.session_state.get("user_email", "unknown@example.com")
+user_role = st.session_state.get("user_role", "guest")
 
+st.sidebar.markdown(f" Role: {user_role} | Email: {user_email}")
+
+if "user_email" not in st.session_state or "user_role" not in st.session_state:
+    st.error("User not recognized. Please go to the main page and log in again.")
+    st.stop()
 # Ensure DB
 if "db_path" not in st.session_state:
     st.warning("No active database. Please upload a file in the main page.")
