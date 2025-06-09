@@ -1,41 +1,145 @@
 import streamlit as st
-from streamlit_qrcode_scanner import qrcode_scanner
-import sqlite3
+import os
 import pandas as pd
+import sqlite3
+import yaml
 
-st.title("Barcode Scanner")
-
-if "db_path" not in st.session_state:
-    st.warning("Please log in from the homepage.")
+# --- Native Login ---
+if not st.user.is_logged_in:
+    st.button("Log in with Google", on_click=st.login)
     st.stop()
 
-st.markdown("Activate your scanner below or use the input as a fallback. If using a webcam, make sure browser permissions are granted.")
+# --- User Info + Logout ---
+st.sidebar.markdown(f"Logged in as: {st.user.get('name', 'Unknown')}")
+st.sidebar.markdown(f"Email: {st.user.get('email', 'unknown@example.com')}")
+if st.sidebar.button("Logout"):
+    st.logout()
 
-# Activation button
-activate_scan = st.button("Start Scanner")
+# --- Load Roles ---
+roles_config = {}
+if os.path.exists("roles.yaml"):
+    with open("roles.yaml") as f:
+        roles_config = yaml.safe_load(f)
 
-barcode = None
+user_email = st.user.get("email", "unknown@example.com")
+st.session_state.user_email = user_email
+user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
+allowed_dbs = roles_config.get("users", {}).get(user_email, {}).get("allowed_dbs", [])
 
-if activate_scan:
-    scanned_code = qrcode_scanner()
-    if scanned_code:
-        st.success(f"Scanned: {scanned_code}")
-        barcode = scanned_code
-    else:
-        st.info("Waiting for camera input...")
+# --- User Directory ---
+user_dir = f"data/{user_email.replace('@', '_at_')}"
+os.makedirs(user_dir, exist_ok=True)
 
-# Manual fallback
-manual_code = st.text_input("Or manually enter barcode")
+# --- Select or Create Database ---
+db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
+if allowed_dbs != ["all"]:
+    db_files = [db for db in db_files if db in allowed_dbs]
 
-barcode = barcode or manual_code
+st.sidebar.write(f"Role: {user_role.capitalize()}")
 
-if barcode:
-    conn = sqlite3.connect(st.session_state.db_path)
-    df = pd.read_sql("SELECT * FROM equipment WHERE serial_number = ?", conn, params=(barcode,))
+selected_db = None
+if db_files:
+    selected_db = st.selectbox("Choose a database to work with", db_files, index=0)
+    if selected_db:
+        st.session_state.selected_db = selected_db
+    if selected_db:
+        st.session_state.selected_db = selected_db
+
+new_db_name = st.text_input("Or create a new database", placeholder="example: laptops.db")
+
+if new_db_name:
+    if not new_db_name.endswith(".db"):
+        new_db_name += ".db"
+    full_new_path = os.path.join(user_dir, new_db_name)
+    if not os.path.exists(full_new_path):
+        open(full_new_path, "w").close()
+        st.success(f"Created new database: {new_db_name}")
+        db_files.append(new_db_name)
+        selected_db = new_db_name
+
+# Optional: delete and rename functionality for admins only
+if user_role == "admin" and selected_db:
+    with st.expander("Manage Databases"):
+        db_to_delete = st.selectbox("Delete database", [f for f in db_files if f != selected_db])
+        if st.button("Delete Selected DB"):
+            os.remove(os.path.join(user_dir, db_to_delete))
+            st.success(f"Deleted {db_to_delete}. Refresh to update list.")
+
+        rename_db = st.text_input("Rename current database", value=selected_db.replace(".db", ""))
+        if st.button("Rename DB") and rename_db:
+            new_path = os.path.join(user_dir, rename_db + ".db")
+            old_path = os.path.join(user_dir, selected_db)
+            if not os.path.exists(new_path):
+                os.rename(old_path, new_path)
+                st.success(f"Renamed to {rename_db}.db. Refresh to use new name.")
+                selected_db = rename_db + ".db"
+            else:
+                st.warning("A database with that name already exists.")
+
+# Ensure a valid database is selected
+if selected_db:
+    selected_db = st.session_state.get("selected_db", selected_db)
+    st.session_state.db_path = os.path.join(user_dir, selected_db)
+    st.markdown(f"Current DB: `{selected_db}`")
+else:
+    st.warning("No database selected or available.")
+    st.stop()
+
+# --- App Body ---
+st.title("Equipment & Inventory Tracking System")
+
+# --- Upload CSV ---
+st.subheader("Upload Inventory CSV")
+uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+
+    # Save to SQLite immediately
+    if "db_path" not in st.session_state:
+    st.warning("Database path not set. Please select a database.")
+    st.stop()
+conn = sqlite3.connect(st.session_state.db_path)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS equipment (
+        equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        serial_number TEXT,
+        type TEXT,
+        model TEXT,
+        status TEXT,
+        purchase_date TEXT,
+        warranty_expiry TEXT,
+        notes TEXT
+    )
+    """)
+    conn.commit()
+
+    df.to_sql("equipment", conn, if_exists="append", index=False)
+    conn.commit()
+
+    st.success(f"Uploaded and saved {len(df)} rows to the database.")
+
+    # Reload and show from DB
+    df_reload = pd.read_sql("SELECT * FROM equipment", conn)
+    st.dataframe(df_reload)
+
+    # Download button
+    csv = df_reload.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Inventory as CSV", csv, file_name="inventory_export.csv", mime="text/csv")
+
     conn.close()
+else:
+    # Show existing data if available
+    conn = sqlite3.connect(st.session_state.db_path)
+    try:
+        existing_df = pd.read_sql("SELECT * FROM equipment", conn)
+        if not existing_df.empty:
+            st.subheader("Existing Inventory Data")
+            st.dataframe(existing_df)
 
-    if not df.empty:
-        st.write("Matching Equipment Found:")
-        st.dataframe(df)
-    else:
-        st.warning("No matching equipment found.")
+            # Download existing data
+            csv = existing_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Inventory as CSV", csv, file_name="inventory_export.csv", mime="text/csv")
+    except Exception:
+        st.info("No inventory data found. Upload a CSV to get started.")
+    finally:
+        conn.close()
