@@ -10,40 +10,56 @@ if not st.user.is_logged_in:
     st.stop()
 
 # --- User Info + Logout ---
-st.sidebar.markdown(f"Logged in as: {st.user.get('name', 'Unknown')}")
-st.sidebar.markdown(f"Email: {st.user.get('email', 'unknown@example.com')}")
+user_email = st.user.get("email", "unknown@example.com")
+user_name = st.user.get("name", "Unknown")
+st.sidebar.markdown(f"Logged in as: {user_name}")
+st.sidebar.markdown(f"Email: {user_email}")
 if st.sidebar.button("Logout"):
     st.logout()
 
-# --- Load Roles ---
+# --- Load/Create Roles ---
 roles_config = {}
 if os.path.exists("roles.yaml"):
     with open("roles.yaml") as f:
-        roles_config = yaml.safe_load(f)
+        roles_config = yaml.safe_load(f) or {}
+else:
+    roles_config = {}
 
-user_email = st.user.get("email", "unknown@example.com")
-st.session_state.user_email = user_email
-user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
-allowed_dbs = roles_config.get("users", {}).get(user_email, {}).get("allowed_dbs", [])
+roles_config.setdefault("users", {})
+
+# Auto-add new user
+if user_email not in roles_config["users"]:
+    roles_config["users"][user_email] = {
+        "role": "user",
+        "allowed_dbs": []
+    }
+    with open("roles.yaml", "w") as f:
+        yaml.safe_dump(roles_config, f)
+
+# User role and DB permissions
+user_role = roles_config["users"][user_email]["role"]
+allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
 
 # --- User Directory ---
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
 
-# --- Sidebar: Select or Create Database ---
+# --- Sidebar: Role and DB Management ---
 st.sidebar.write(f"Role: {user_role.capitalize()}")
-db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
+
+# Find existing DBs
+db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
 if allowed_dbs != ["all"]:
     db_files = [db for db in db_files if db in allowed_dbs]
 
-# Dropdown to choose DB
+# --- Select DB ---
 if db_files:
     selected_db = st.sidebar.selectbox("Choose a database", db_files)
     st.session_state.selected_db = selected_db
 else:
     st.sidebar.warning("No databases found. Create one below.")
 
-# Create DB
+# --- Create DB ---
 new_db_name = st.sidebar.text_input("Create new database", placeholder="example: laptops.db")
 if st.sidebar.button("Create DB") and new_db_name:
     if not new_db_name.endswith(".db"):
@@ -51,11 +67,35 @@ if st.sidebar.button("Create DB") and new_db_name:
     full_path = os.path.join(user_dir, new_db_name)
     if not os.path.exists(full_path):
         open(full_path, "w").close()
-        st.success(f"Created: {new_db_name}")
         st.session_state.selected_db = new_db_name
+
+        # Add DB to user's allowed list
+        if user_role != "admin":
+            roles_config["users"][user_email]["allowed_dbs"].append(new_db_name)
+            with open("roles.yaml", "w") as f:
+                yaml.safe_dump(roles_config, f)
+
+        st.success(f"Created: {new_db_name}")
         st.rerun()
     else:
         st.sidebar.error("Database already exists.")
+
+# --- Delete DBs (only user-owned or all if admin) ---
+if db_files:
+    deletable = (
+        db_files if user_role == "admin"
+        else [db for db in db_files if db in allowed_dbs]
+    )
+    with st.sidebar.expander("Delete Database"):
+        db_to_delete = st.selectbox("Delete which?", deletable)
+        if st.button("Delete DB"):
+            os.remove(os.path.join(user_dir, db_to_delete))
+            if db_to_delete in roles_config["users"][user_email]["allowed_dbs"]:
+                roles_config["users"][user_email]["allowed_dbs"].remove(db_to_delete)
+                with open("roles.yaml", "w") as f:
+                    yaml.safe_dump(roles_config, f)
+            st.success(f"{db_to_delete} deleted.")
+            st.rerun()
 
 # --- Main Section ---
 if "selected_db" not in st.session_state:
@@ -67,7 +107,7 @@ st.session_state.db_path = db_path
 st.title("Equipment & Inventory Tracking System")
 st.markdown(f"**Current DB**: `{st.session_state.selected_db}`")
 
-# Upload inventory
+# --- Upload Inventory ---
 st.subheader("Upload Inventory File")
 uploaded_file = st.file_uploader("Upload CSV, Excel, JSON or TSV", type=["csv", "xlsx", "xls", "tsv", "json"])
 if uploaded_file:
@@ -95,7 +135,7 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Error processing file: {e}")
 
-# Load and display saved inventory
+# --- Show Current Inventory ---
 try:
     with sqlite3.connect(db_path) as conn:
         existing_df = pd.read_sql("SELECT * FROM equipment", conn)
@@ -105,7 +145,7 @@ try:
 except:
     st.info("No inventory data found.")
 
-# Condensed Dashboard
+# --- Dashboard Summary ---
 st.subheader("📊 Dashboard Summary")
 with sqlite3.connect(db_path) as conn:
     try:
