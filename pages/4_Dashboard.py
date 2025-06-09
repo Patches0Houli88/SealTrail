@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import altair as alt
+import os
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Full Dashboard", layout="wide")
