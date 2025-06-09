@@ -57,11 +57,22 @@ st.subheader("Edit Items")
 if df.empty:
     st.info("No data available to edit.")
 else:
-    sort_col = st.selectbox("Sort by column:", df.columns.drop("rowid"))
-    sort_order = st.radio("Order:", ["A-Z / 0-9", "Z-A / 9-0"])
-    df_sorted = df.sort_values(by=sort_col, ascending=(sort_order == "A-Z / 0-9"))
+    st.markdown("### Filter Inventory")
+    filter_col = st.selectbox("Select column to filter by", df.columns.drop("rowid"))
+    filter_value = st.text_input("Filter value contains:")
 
-    editable_df = st.data_editor(df_sorted.drop(columns="rowid"), num_rows="dynamic", use_container_width=True, key="editor")
+    if filter_value:
+        filtered_df = df[df[filter_col].astype(str).str.contains(filter_value, na=False)]
+    else:
+        filtered_df = df.copy()
+
+    editable_df = st.data_editor(
+        filtered_df.drop(columns="rowid"),
+        num_rows="dynamic",
+        use_container_width=True,
+        key="editor"
+    )
+
     if st.button("Save Changes"):
         cursor.execute("DELETE FROM equipment")
         editable_df.to_sql("equipment", conn, if_exists="append", index=False)
