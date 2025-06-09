@@ -12,6 +12,8 @@ st.title("Inventory Management")
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 
+st.sidebar.markdown(f"🔍 Role: {user_role} | Email: {user_email}")
+
 # --- Check for active DB ---
 if "db_path" not in st.session_state:
     st.warning("No database selected. Please choose one from the main page.")
