@@ -1,126 +1,123 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
+import pandas as pd
 import altair as alt
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from fpdf import FPDF
 
 st.set_page_config(page_title="Full Dashboard", layout="wide")
 st.title("📊 Equipment & Inventory Dashboard")
 
-# --- DB Connection ---
-db_path = st.session_state.get("db_path")
-if not db_path:
-    st.error("No database selected. Please return to the main page and select one.")
+if "db_path" not in st.session_state:
+    st.warning("No database selected. Please select one from the main page.")
     st.stop()
 
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(st.session_state.db_path)
 
-# --- Load Tables ---
-equipment_df, maintenance_df, scan_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
+# --- Load Data ---
 try:
     equipment_df = pd.read_sql("SELECT * FROM equipment", conn)
 except:
-    st.warning("No equipment data found.")
+    equipment_df = pd.DataFrame()
 
 try:
     maintenance_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
 except:
-    st.warning("No maintenance logs found.")
+    maintenance_df = pd.DataFrame()
 
 try:
-    scan_df = pd.read_sql("SELECT * FROM scanned_items", conn)
+    scans_df = pd.read_sql("SELECT * FROM scanned_items", conn)
 except:
-    st.warning("No scan history found.")
+    scans_df = pd.DataFrame()
 
 conn.close()
 
-# --- Layout ---
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Inventory Items", len(equipment_df))
-with col2:
-    st.metric("Maintenance Logs", len(maintenance_df))
-with col3:
-    st.metric("Scans Logged", len(scan_df))
+tab1, tab2, tab3 = st.tabs(["📦 Inventory", "🛠 Maintenance", "📷 Barcode Scans"])
 
-# --- Filters ---
-st.markdown("---")
-st.subheader("Interactive Charts and Reports")
-
-tab1, tab2, tab3 = st.tabs(["Inventory Overview", "Maintenance Timeline", "Scan Activity"])
-
+# --- Inventory Tab ---
 with tab1:
+    st.subheader("Inventory Overview")
     if not equipment_df.empty:
-        category_col = st.selectbox("Select inventory column to visualize", options=equipment_df.columns)
-        category_filter = st.multiselect("Filter by value", options=equipment_df[category_col].unique())
-        filtered_df = equipment_df[equipment_df[category_col].isin(category_filter)] if category_filter else equipment_df
-        chart = alt.Chart(filtered_df).mark_bar().encode(
-            x=alt.X(f"{category_col}:N", sort="-y"),
-            y='count()',
-            tooltip=[category_col, 'count()']
-        ).properties(width=700, height=400)
-        st.altair_chart(chart)
+        st.dataframe(equipment_df)
 
+        # Pie Chart by Status
+        if "status" in equipment_df.columns:
+            status_chart = (
+                alt.Chart(equipment_df)
+                .mark_arc()
+                .encode(
+                    theta=alt.Theta(field="count", type="quantitative"),
+                    color=alt.Color(field="status", type="nominal"),
+                    tooltip=["status", "count"],
+                )
+                .transform_aggregate(
+                    count='count()',
+                    groupby=["status"]
+                )
+            )
+            st.altair_chart(status_chart, use_container_width=True)
+    else:
+        st.info("No inventory data to display.")
+
+# --- Maintenance Tab ---
 with tab2:
+    st.subheader("Maintenance Logs")
     if not maintenance_df.empty:
-        maintenance_df['date'] = pd.to_datetime(maintenance_df['date'], errors='coerce')
-        start, end = st.date_input("Filter maintenance by date", [], key="maint_range")
-        if start and end:
-            maintenance_df = maintenance_df[(maintenance_df['date'] >= pd.to_datetime(start)) & (maintenance_df['date'] <= pd.to_datetime(end))]
-        chart = alt.Chart(maintenance_df).mark_bar().encode(
-            x=alt.X("date:T", title="Maintenance Date"),
-            y=alt.Y("count():Q", title="Logs"),
-            tooltip=["date", "count()"]
-        ).properties(width=700, height=400)
-        st.altair_chart(chart)
+        if "date" in maintenance_df.columns:
+            maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
 
+            default_start = datetime.today() - timedelta(days=30)
+            default_end = datetime.today()
+
+            start, end = st.date_input(
+                "Filter maintenance by date",
+                (default_start, default_end),
+                key="maintenance_date_range"
+            )
+
+            if start and end:
+                maintenance_df = maintenance_df[
+                    (maintenance_df["date"] >= pd.to_datetime(start)) &
+                    (maintenance_df["date"] <= pd.to_datetime(end))
+                ]
+
+        st.dataframe(maintenance_df)
+
+        if "equipment_id" in maintenance_df.columns:
+            chart = (
+                alt.Chart(maintenance_df)
+                .mark_bar()
+                .encode(
+                    x="equipment_id:N",
+                    y="count():Q",
+                    tooltip=["equipment_id", "count()"]
+                )
+            )
+            st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("No maintenance logs available.")
+
+# --- Scans Tab ---
 with tab3:
-    if not scan_df.empty:
-        scan_df['timestamp'] = pd.to_datetime(scan_df['timestamp'], errors='coerce')
-        user_filter = st.multiselect("Filter by user", options=scan_df['scanned_by'].dropna().unique())
-        filtered = scan_df[scan_df['scanned_by'].isin(user_filter)] if user_filter else scan_df
-        date_start, date_end = st.date_input("Date range for scans", [])
-        if date_start and date_end:
-            filtered = filtered[(filtered['timestamp'] >= pd.to_datetime(date_start)) & (filtered['timestamp'] <= pd.to_datetime(date_end))]
-        scan_counts = filtered.groupby(filtered['timestamp'].dt.date)['code'].count().reset_index(name='count')
-        chart = alt.Chart(scan_counts).mark_area().encode(
-            x=alt.X("timestamp:T", title="Date"),
-            y=alt.Y("count:Q", title="Scans"),
-            tooltip=["timestamp", "count"]
-        ).properties(width=700, height=400)
-        st.altair_chart(chart)
+    st.subheader("Barcode Scan History")
+    if not scans_df.empty:
+        st.dataframe(scans_df)
 
-# --- Download Data ---
-st.markdown("---")
-st.subheader("Export Data")
-col1, col2, col3 = st.columns(3)
+        if "timestamp" in scans_df.columns:
+            scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"])
+            scans_df["date"] = scans_df["timestamp"].dt.date
+            daily_counts = scans_df.groupby("date").size().reset_index(name="scan_count")
 
-with col1:
-    if not equipment_df.empty:
-        st.download_button("Download Equipment CSV", equipment_df.to_csv(index=False).encode(), file_name="equipment.csv")
-
-with col2:
-    if not maintenance_df.empty:
-        st.download_button("Download Maintenance CSV", maintenance_df.to_csv(index=False).encode(), file_name="maintenance_log.csv")
-
-with col3:
-    if not scan_df.empty:
-        st.download_button("Download Scan History CSV", scan_df.to_csv(index=False).encode(), file_name="scan_log.csv")
-
-# --- PDF Export ---
-if st.button("📄 Generate Summary Report PDF"):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="Inventory Dashboard Summary", ln=True, align='C')
-    pdf.ln(10)
-    pdf.cell(200, 10, txt=f"Inventory Items: {len(equipment_df)}", ln=True)
-    pdf.cell(200, 10, txt=f"Maintenance Logs: {len(maintenance_df)}", ln=True)
-    pdf.cell(200, 10, txt=f"Scan Records: {len(scan_df)}", ln=True)
-
-    output = BytesIO()
-    pdf.output(output)
-    st.download_button("Download Summary PDF", output.getvalue(), file_name="dashboard_summary.pdf", mime="application/pdf")
+            chart = (
+                alt.Chart(daily_counts)
+                .mark_line(point=True)
+                .encode(
+                    x="date:T",
+                    y="scan_count:Q",
+                    tooltip=["date", "scan_count"]
+                )
+            )
+            st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("No barcode scan data found.")
