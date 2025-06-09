@@ -40,6 +40,8 @@ st.sidebar.write(f"Role: {user_role.capitalize()}")
 selected_db = None
 if db_files:
     selected_db = st.selectbox("Choose a database to work with", db_files)
+    if selected_db:
+        st.session_state.selected_db = selected_db
 
 new_db_name = st.text_input("Or create a new database", placeholder="example: laptops.db")
 
@@ -74,6 +76,7 @@ if user_role == "admin" and selected_db:
 
 # Ensure a valid database is selected
 if selected_db:
+    selected_db = st.session_state.get("selected_db", selected_db)
     st.session_state.db_path = os.path.join(user_dir, selected_db)
     st.markdown(f"Current DB: `{selected_db}`")
 else:
@@ -90,7 +93,10 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
 
     # Save to SQLite immediately
-    conn = sqlite3.connect(st.session_state.db_path)
+    if "db_path" not in st.session_state:
+    st.warning("Database path not set. Please select a database.")
+    st.stop()
+conn = sqlite3.connect(st.session_state.db_path)
     conn.execute("""
     CREATE TABLE IF NOT EXISTS equipment (
         equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,7 +111,7 @@ if uploaded_file:
     """)
     conn.commit()
 
-    df.to_sql("equipment", conn, if_exists="replace", index=False)
+    df.to_sql("equipment", conn, if_exists="append", index=False)
     conn.commit()
 
     st.success(f"Uploaded and saved {len(df)} rows to the database.")
