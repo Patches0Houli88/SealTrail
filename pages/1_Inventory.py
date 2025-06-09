@@ -15,14 +15,12 @@ if "db_path" not in st.session_state:
 conn = sqlite3.connect(st.session_state.db_path)
 cursor = conn.cursor()
 
-# --- Load Role Fallback ---
 if "user_role" not in st.session_state:
-    email = st.session_state.get("user_email", "unknown@example.com")
-    roles_config = {}
+    user_email = st.session_state.get("user_email", "unknown@example.com")
     if os.path.exists("roles.yaml"):
         with open("roles.yaml") as f:
             roles_config = yaml.safe_load(f)
-    st.session_state.user_role = roles_config.get("users", {}).get(email, {}).get("role", "guest")
+        st.session_state.user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
 
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.user_role
@@ -86,10 +84,24 @@ if not df.empty:
         st.rerun()
 
 # --- Edit Table with Deletions ---
-st.subheader("Edit & Delete Items")
-if df.empty:
-    st.info("No data available.")
-else:
+# View table
+df["selected"] = False
+edited_df = st.data_editor(
+    df,
+    use_container_width=True,
+    key="editor_with_checkbox",
+    disabled=["rowid"],
+    num_rows="dynamic"
+)
+
+# Button to delete rows where 'selected' is True
+if st.button("Delete Checked Rows"):
+    to_delete = edited_df[edited_df["selected"] == True]["rowid"].tolist()
+    if to_delete:
+        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(rid,) for rid in to_delete])
+        conn.commit()
+        st.success(f"Deleted {len(to_delete)} rows.")
+        st.rerun()
     # Optional filter
     filter_col = st.selectbox("Filter by column", df.columns.drop("rowid"))
     filter_val = st.text_input("Contains:")
