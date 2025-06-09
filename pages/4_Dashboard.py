@@ -2,8 +2,10 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import altair as alt
-import os
 from datetime import datetime, timedelta
+from io import BytesIO
+from fpdf import FPDF
+import os 
 
 st.set_page_config(page_title="Full Dashboard", layout="wide")
 st.title("📊 Equipment & Inventory Dashboard")
