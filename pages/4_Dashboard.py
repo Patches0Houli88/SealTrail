@@ -10,6 +10,17 @@ import os
 st.set_page_config(page_title="Full Dashboard", layout="wide")
 st.title("📊 Equipment & Inventory Dashboard")
 
+# --- Get user role and email ---
+user_email = st.session_state.get("user_email", "unknown@example.com")
+user_role = st.session_state.get("user_role", "guest")
+
+st.sidebar.markdown(f" Role: {user_role} | Email: {user_email}")
+
+if "user_email" not in st.session_state or "user_role" not in st.session_state:
+    st.error("User not recognized. Please go to the main page and log in again.")
+    st.stop()
+
+# Set DB
 if "db_path" not in st.session_state:
     st.warning("No database selected. Please select one from the main page.")
     st.stop()
