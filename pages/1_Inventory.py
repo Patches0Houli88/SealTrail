@@ -16,13 +16,14 @@ if "db_path" not in st.session_state:
 conn = sqlite3.connect(st.session_state.db_path)
 cursor = conn.cursor()
 
-# --- Role Fallback Loader ---
+# Fallback to load role if not already in session
 if "user_role" not in st.session_state:
     user_email = st.session_state.get("user_email", "unknown@example.com")
+    st.session_state.user_email = user_email  # ensure set
     if os.path.exists("roles.yaml"):
         with open("roles.yaml") as f:
-            roles_config = yaml.safe_load(f)
-        st.session_state.user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
+            roles = yaml.safe_load(f)
+        st.session_state.user_role = roles.get("users", {}).get(user_email, {}).get("role", "guest")
 
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.user_role
