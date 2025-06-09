@@ -22,48 +22,62 @@ if os.path.exists("roles.yaml"):
         roles_config = yaml.safe_load(f)
 
 user_email = st.user.get("email", "unknown@example.com")
-st.session_state.user_email = user_email
 user_role = roles_config.get("users", {}).get(user_email, {}).get("role", "guest")
 allowed_dbs = roles_config.get("users", {}).get(user_email, {}).get("allowed_dbs", [])
 
-# --- User Directory ---
+st.session_state.user_email = user_email
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
 
-# --- Database Selection ---
-st.sidebar.write(f"Role: {user_role.capitalize()}")
+# --- List DB Files ---
 db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
 if allowed_dbs != ["all"]:
-    db_files = [db for db in db_files if db in allowed_dbs]
+    db_files = [f for f in db_files if f in allowed_dbs]
 
-selected_db = None
+st.sidebar.write(f"Role: {user_role.capitalize()}")
+
+# --- Create New Database ---
+st.subheader("Select or Create a Database")
+new_db_name = st.text_input("New Database Name", placeholder="example: laptops.db")
+
+if st.button("Create Database"):
+    if new_db_name:
+        if not new_db_name.endswith(".db"):
+            new_db_name += ".db"
+        new_path = os.path.join(user_dir, new_db_name)
+        if not os.path.exists(new_path):
+            open(new_path, "w").close()
+            st.session_state.selected_db = new_db_name
+            st.success(f"Created and selected: {new_db_name}")
+            st.rerun()
+        else:
+            st.warning("A database with that name already exists.")
+
+# --- Select Existing Database ---
 if db_files:
-    selected_db = st.selectbox("Choose a database to work with", db_files)
+    selected_db = st.sidebar.selectbox("Choose a database", db_files, index=0)
     if selected_db:
         st.session_state.selected_db = selected_db
 
-# --- Create New Database ---
-new_db_name = st.text_input("Or create a new database", placeholder="example: laptops.db")
-if st.button("Create"):
-    if not new_db_name.endswith(".db"):
-        new_db_name += ".db"
-    new_db_path = os.path.join(user_dir, new_db_name)
-    if not os.path.exists(new_db_path):
-        open(new_db_path, "w").close()
-        st.session_state.selected_db = new_db_name
-        st.success(f"Created and switched to: {new_db_name}")
-        st.rerun()
+# --- No Database Selected ---
+if "selected_db" not in st.session_state:
+    st.warning("Please create or select a database to continue.")
+    st.stop()
+
+st.session_state.db_path = os.path.join(user_dir, st.session_state.selected_db)
+st.markdown(f"**Current DB: `{st.session_state.selected_db}`**")
 
 # --- Admin DB Management ---
-if user_role == "admin" and "selected_db" in st.session_state:
+if user_role == "admin":
     with st.expander("Manage Databases"):
         db_to_delete = st.selectbox("Delete database", [f for f in db_files if f != st.session_state.selected_db])
         if st.button("Delete Selected DB"):
             os.remove(os.path.join(user_dir, db_to_delete))
-            st.success(f"Deleted {db_to_delete}. Refresh to update list.")
+            st.success(f"Deleted {db_to_delete}")
+            st.rerun()
 
-        rename_db = st.text_input("Rename current database", value=st.session_state.selected_db.replace(".db", ""))
-        if st.button("Rename DB") and rename_db:
+        rename_db = st.text_input("Rename current DB", value=st.session_state.selected_db.replace(".db", ""))
+        if st.button("Rename DB"):
             new_path = os.path.join(user_dir, rename_db + ".db")
             old_path = os.path.join(user_dir, st.session_state.selected_db)
             if not os.path.exists(new_path):
@@ -72,20 +86,9 @@ if user_role == "admin" and "selected_db" in st.session_state:
                 st.session_state.selected_db = rename_db + ".db"
                 st.rerun()
             else:
-                st.warning("A database with that name already exists.")
+                st.warning("A DB with that name already exists.")
 
-# --- Ensure DB is Selected ---
-if "selected_db" not in st.session_state:
-    st.warning("No database selected or available.")
-    st.stop()
-
-st.session_state.db_path = os.path.join(user_dir, st.session_state.selected_db)
-st.markdown(f"**Current DB: `{st.session_state.selected_db}`**")
-
-# --- App Body ---
-st.title("Equipment & Inventory Tracking System")
-
-# --- File Upload Section ---
+# --- File Upload ---
 st.subheader("Upload Inventory File")
 uploaded_file = st.file_uploader("Upload inventory data", type=["csv", "xlsx", "xls", "tsv", "json"])
 if uploaded_file:
@@ -103,48 +106,48 @@ if uploaded_file:
             st.error("Unsupported file type.")
             st.stop()
 
-        # Save to SQLite
         conn = sqlite3.connect(st.session_state.db_path)
         df.to_sql("equipment", conn, if_exists="replace", index=False)
         conn.commit()
         conn.close()
 
-        st.success(f"Uploaded and auto-saved {len(df)} rows to the database.")
+        st.success(f"Uploaded and auto-saved {len(df)} rows.")
         st.dataframe(df)
+
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("Download Inventory as CSV", csv, "inventory_export.csv", mime="text/csv")
 
         if st.button("Save to DB"):
             conn = sqlite3.connect(st.session_state.db_path)
             df.to_sql("equipment", conn, if_exists="replace", index=False)
             conn.commit()
             conn.close()
-            st.success("Manually saved to database.")
-
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Inventory as CSV", csv, "inventory_export.csv", mime="text/csv")
+            st.success("Manually saved to DB.")
 
     except Exception as e:
-        st.error(f"Failed to process file: {e}")
+        st.error(f"Error: {e}")
 else:
     try:
         conn = sqlite3.connect(st.session_state.db_path)
-        existing_df = pd.read_sql("SELECT * FROM equipment", conn)
-        if not existing_df.empty:
-            st.subheader("Existing Inventory Data")
-            st.dataframe(existing_df)
-            csv = existing_df.to_csv(index=False).encode("utf-8")
+        df = pd.read_sql("SELECT * FROM equipment", conn)
+        if not df.empty:
+            st.subheader("Current Inventory")
+            st.dataframe(df)
+
+            csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("Download Inventory as CSV", csv, "inventory_export.csv", mime="text/csv")
         conn.close()
-    except Exception:
-        st.info("No inventory data found.")
+    except:
+        st.info("No inventory found.")
 
-# --- Condensed Dashboard ---
-st.subheader("📊 Quick Dashboard")
+# --- Quick Dashboard ---
+st.subheader("📊 Quick Stats")
 with sqlite3.connect(st.session_state.db_path) as conn:
     try:
         items_df = pd.read_sql("SELECT * FROM equipment", conn)
         st.metric("Inventory Items", len(items_df))
     except:
-        st.info("No inventory data.")
+        st.info("No inventory yet.")
 
     try:
         logs_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
@@ -156,4 +159,4 @@ with sqlite3.connect(st.session_state.db_path) as conn:
         scans_df = pd.read_sql("SELECT * FROM scanned_items", conn)
         st.metric("Barcode Scans", len(scans_df))
     except:
-        st.info("No scan data.")
+        st.info("No scans recorded.")
