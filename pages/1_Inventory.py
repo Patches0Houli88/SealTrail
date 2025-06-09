@@ -8,6 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="Inventory", layout="wide")
 st.title("Inventory Management")
 
+# --- Check for active DB ---
 if "db_path" not in st.session_state:
     st.warning("No database selected. Please choose one from the main page.")
     st.stop()
@@ -15,6 +16,7 @@ if "db_path" not in st.session_state:
 conn = sqlite3.connect(st.session_state.db_path)
 cursor = conn.cursor()
 
+# --- Role Fallback Loader ---
 if "user_role" not in st.session_state:
     user_email = st.session_state.get("user_email", "unknown@example.com")
     if os.path.exists("roles.yaml"):
@@ -25,7 +27,7 @@ if "user_role" not in st.session_state:
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.user_role
 
-# Load data
+# --- Load Data ---
 def load_data():
     try:
         return pd.read_sql("SELECT rowid, * FROM equipment", conn)
@@ -34,37 +36,34 @@ def load_data():
 
 df = load_data()
 
-# --- Admin-only: Add Column ---
+# --- Admin-only Column Add ---
 if user_role == "admin":
     st.subheader("🔧 Admin Tools")
     with st.expander("➕ Add New Column"):
-        new_col_name = st.text_input("Column name", key="col_name")
-        new_col_type = st.selectbox("Column type", ["TEXT", "INTEGER", "REAL"], key="col_type")
+        new_col_name = st.text_input("Column name", key="admin_add_column")
+        new_col_type = st.selectbox("Column type", ["TEXT", "INTEGER", "REAL"], key="admin_col_type")
         if st.button("Add Column") and new_col_name:
             try:
                 cursor.execute(f"ALTER TABLE equipment ADD COLUMN {new_col_name} {new_col_type}")
-                # Log to audit table
-                timestamp = datetime.utcnow().isoformat()
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         timestamp TEXT, action TEXT, user TEXT, detail TEXT
                     )
                 """)
                 cursor.execute("INSERT INTO audit_log VALUES (?, ?, ?, ?)",
-                    (timestamp, "Add Column", user_email, f"{new_col_name} ({new_col_type})"))
+                               (datetime.utcnow().isoformat(), "Add Column", user_email, f"{new_col_name} ({new_col_type})"))
                 conn.commit()
                 st.success(f"Column `{new_col_name}` added.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to add column: {e}")
+                st.error(f"Error adding column: {e}")
 
-# --- Add New Item ---
+# --- Add New Inventory Item ---
 if not df.empty:
     st.subheader("Add New Item")
-    col_names = df.columns.drop("rowid")
+    col_names = df.columns.drop(["rowid", "selected"], errors="ignore")
     new_data = {}
     cols = st.columns(len(col_names))
-
     for i, col in enumerate(col_names):
         unique = df[col].dropna().unique().tolist()
         if 1 < len(unique) < 20:
@@ -77,57 +76,45 @@ if not df.empty:
     if st.button("Add to Inventory"):
         values = tuple(new_data[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
-        sql = f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})"
-        cursor.execute(sql, values)
+        cursor.execute(f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})", values)
         conn.commit()
         st.success("Item added!")
         st.rerun()
 
-# --- Edit Table with Deletions ---
-# View table
-df["selected"] = False
-edited_df = st.data_editor(
-    df,
-    use_container_width=True,
-    key="editor_with_checkbox",
-    disabled=["rowid"],
-    num_rows="dynamic"
-)
-
-# Button to delete rows where 'selected' is True
-if st.button("Delete Checked Rows"):
-    to_delete = edited_df[edited_df["selected"] == True]["rowid"].tolist()
-    if to_delete:
-        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(rid,) for rid in to_delete])
-        conn.commit()
-        st.success(f"Deleted {len(to_delete)} rows.")
-        st.rerun()
-    # Optional filter
+# --- Edit Table with Checkbox-based Delete ---
+st.subheader("Edit & Delete Items")
+if df.empty:
+    st.info("No data available.")
+else:
     filter_col = st.selectbox("Filter by column", df.columns.drop("rowid"))
     filter_val = st.text_input("Contains:")
     if filter_val:
-        df = df[df[filter_col].astype(str).str.contains(filter_val)]
+        df = df[df[filter_col].astype(str).str.contains(filter_val, na=False)]
+
+    # Add checkbox column
+    df["selected"] = False
 
     editable_df = st.data_editor(
         df,
-        num_rows="dynamic",
         use_container_width=True,
-        key="editable_table",
+        num_rows="dynamic",
+        key="editor_table",
         disabled=["rowid"]
     )
 
     if st.button("Save Changes"):
         cursor.execute("DELETE FROM equipment")
-        editable_df.drop(columns=["rowid"]).to_sql("equipment", conn, if_exists="append", index=False)
+        editable_df.drop(columns=["rowid", "selected"]).to_sql("equipment", conn, if_exists="append", index=False)
         conn.commit()
         st.success("Changes saved.")
         st.rerun()
 
-    selected_ids = st.multiselect("Select rowids to delete", df["rowid"].tolist(), key="delete_select")
-    if st.button("Delete Selected") and selected_ids:
-        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in selected_ids])
-        conn.commit()
-        st.success("Selected rows deleted.")
-        st.rerun()
+    if st.button("Delete Checked Rows"):
+        to_delete = editable_df[editable_df["selected"] == True]["rowid"].tolist()
+        if to_delete:
+            cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(rid,) for rid in to_delete])
+            conn.commit()
+            st.success(f"Deleted {len(to_delete)} rows.")
+            st.rerun()
 
 conn.close()
