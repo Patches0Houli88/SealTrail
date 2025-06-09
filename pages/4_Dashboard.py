@@ -115,17 +115,27 @@ end_date = st.sidebar.date_input("End Date", datetime.today())
 if st.sidebar.checkbox("🔄 Auto Refresh"):
     st.rerun()
 
-# --- KPI Cards (by Type) ---
+# --- KPI Cards ---
 if st.session_state.visible_widgets.get("kpis"):
-    st.subheader("📌 Equipment Summary")
+    st.subheader("📌 Key Stats")
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Equipment", len(equipment_df))
+
     if "type" in equipment_df.columns:
-        top_types = equipment_df["type"].dropna().value_counts().head(2)
-        if len(top_types) >= 1:
+        equipment_df["type"] = equipment_df["type"].astype(str).str.strip()
+        top_types = equipment_df["type"].value_counts()
+        if not top_types.empty:
             col2.metric(f"Top Type: {top_types.index[0]}", top_types.iloc[0])
-        if len(top_types) == 2:
-            col3.metric(f"Next: {top_types.index[1]}", top_types.iloc[1])
+            if len(top_types) > 1:
+                col3.metric(f"2nd Type: {top_types.index[1]}", top_types.iloc[1])
+            else:
+                col3.write("Only one type found.")
+        else:
+            col2.write("No type data.")
+            col3.write("—")
+    else:
+        col2.write("No 'type' column.")
+        col3.write("—")
 
 # --- Status Chart ---
 if st.session_state.visible_widgets.get("status_chart") and "status" in equipment_df.columns:
@@ -147,11 +157,12 @@ if st.session_state.visible_widgets.get("inventory_table"):
     st.subheader("Inventory Table")
     st.dataframe(equipment_df, use_container_width=True)
 
-# --- Maintenance Timeline ---
+# --- Maintenance Chart ---
 if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
-    st.subheader("🛠 Maintenance Logs")
+    st.subheader("🛠 Maintenance Activity")
     if "maintenance_date" in maintenance_df.columns:
         maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
+        maintenance_df = maintenance_df.dropna(subset=["maintenance_date"])
         filtered = maintenance_df[
             (maintenance_df["maintenance_date"] >= pd.to_datetime(start_date)) &
             (maintenance_df["maintenance_date"] <= pd.to_datetime(end_date))
@@ -159,26 +170,35 @@ if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance
         if not filtered.empty:
             chart = alt.Chart(filtered).mark_bar().encode(
                 x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
-            ).transform_aggregate(count="count()", groupby=["maintenance_date"])
+            ).transform_aggregate(
+                count="count()", groupby=["maintenance_date"]
+            )
             st.altair_chart(chart, use_container_width=True)
         else:
-            st.info("No maintenance data in selected range.")
+            st.info("No maintenance logs found for selected range.")
+    else:
+        st.warning("No 'maintenance_date' column found.")
 
-# --- Scans Timeline ---
+# --- Scans Chart ---
 if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
-    st.subheader("📷 Scans Over Time")
+    st.subheader("📷 Barcode Scans Over Time")
     if "timestamp" in scans_df.columns:
         scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
+        scans_df = scans_df.dropna(subset=["timestamp"])
         scans_df["date"] = scans_df["timestamp"].dt.date
-        filtered = scans_df[(scans_df["date"] >= start_date) & (scans_df["date"] <= end_date)]
-        grouped = filtered.groupby("date").size().reset_index(name="scan_count")
-        if not grouped.empty:
-            chart = alt.Chart(grouped).mark_line(point=True).encode(
+        filtered = scans_df[
+            (scans_df["date"] >= start_date) & (scans_df["date"] <= end_date)
+        ]
+        if not filtered.empty:
+            scan_data = filtered.groupby("date").size().reset_index(name="scan_count")
+            chart = alt.Chart(scan_data).mark_line(point=True).encode(
                 x="date:T", y="scan_count:Q", tooltip=["date", "scan_count"]
             )
             st.altair_chart(chart, use_container_width=True)
         else:
-            st.info("No scans in selected date range.")
+            st.info("No scans found for selected range.")
+    else:
+        st.warning("No 'timestamp' column found.")
 
 # --- Export & Email Report ---
 st.markdown("---")
