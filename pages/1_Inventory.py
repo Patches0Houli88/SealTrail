@@ -1,49 +1,67 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
+import pandas as pd
 
-st.title("Inventory")
+st.set_page_config(page_title="Inventory", layout="wide")
+st.title("Inventory Management")
 
-# Display active DB
 if "db_path" not in st.session_state:
-    st.warning("No active database. Please upload a file first.")
+    st.warning("No database selected. Please choose one from the main page.")
     st.stop()
 
-st.markdown(f"Using Database: `{st.session_state.selected_db}`")
-
-# Load inventory
 conn = sqlite3.connect(st.session_state.db_path)
-try:
-    df = pd.read_sql("SELECT * FROM equipment", conn)
-except Exception as e:
-    st.error(f"Error loading inventory: {e}")
-    conn.close()
-    st.stop()
-conn.close()
+cursor = conn.cursor()
 
-# Show filters only for existing columns
-st.subheader("Filter Inventory")
+# Load existing data
+def load_data():
+    try:
+        df = pd.read_sql("SELECT rowid, * FROM equipment", conn)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+df = load_data()
+
+# --- Add New Inventory Item ---
+st.subheader("Add New Item")
+with st.form("add_form"):
+    columns = ["name", "type", "status", "location", "serial"]
+    inputs = {}
+    col_layout = st.columns(len(columns))
+    for i, col in enumerate(columns):
+        inputs[col] = col_layout[i].text_input(col.capitalize())
+
+    submitted = st.form_submit_button("Add to Inventory")
+    if submitted:
+        values = tuple(inputs[col] for col in columns)
+        placeholders = ', '.join('?' for _ in values)
+        sql = f"INSERT INTO equipment ({', '.join(columns)}) VALUES ({placeholders})"
+        cursor.execute(sql, values)
+        conn.commit()
+        st.success("Item added!")
+        st.rerun()
+
+# --- Edit Inventory ---
+st.subheader("Edit Items")
 if df.empty:
-    st.info("No data available.")
-    st.stop()
+    st.info("No data available to edit.")
+else:
+    editable_df = st.data_editor(df.drop(columns="rowid"), num_rows="dynamic", use_container_width=True, key="editor")
+    if st.button("Save Changes"):
+        cursor.execute("DELETE FROM equipment")
+        editable_df.to_sql("equipment", conn, if_exists="append", index=False)
+        conn.commit()
+        st.success("Changes saved.")
+        st.rerun()
 
-# Dynamically offer filters
-col1, col2 = st.columns(2)
+# --- Delete Items ---
+st.subheader("Delete Items")
+if not df.empty:
+    delete_ids = st.multiselect("Select items to delete:", df["rowid"].tolist())
+    if st.button("Delete Selected") and delete_ids:
+        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in delete_ids])
+        conn.commit()
+        st.success("Selected items deleted.")
+        st.rerun()
 
-if "type" in df.columns:
-    with col1:
-        selected_type = st.selectbox("Equipment Type", ["All"] + sorted(df["type"].dropna().unique().tolist()))
-        if selected_type != "All":
-            df = df[df["type"] == selected_type]
-
-if "status" in df.columns:
-    with col2:
-        selected_status = st.selectbox("Status", ["All"] + sorted(df["status"].dropna().unique().tolist()))
-        if selected_status != "All":
-            df = df[df["status"] == selected_status]
-
-st.subheader("Inventory Table")
-st.dataframe(df)
-
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button("Download Filtered Inventory", csv, file_name="filtered_inventory.csv", mime="text/csv")
+conn.close()
