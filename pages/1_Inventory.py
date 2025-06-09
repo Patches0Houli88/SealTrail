@@ -32,7 +32,7 @@ if user_role == "admin":
     with st.expander("➕ Add New Column"):
         new_col_name = st.text_input("Column name", key="col_name")
         new_col_type = st.selectbox("Column type", ["TEXT", "INTEGER", "REAL"], key="col_type")
-        if st.button("Add Column"):
+        if st.button("Add Column", key="add_col_btn"):
             try:
                 cursor.execute(f"ALTER TABLE equipment ADD COLUMN {new_col_name} {new_col_type}")
                 # Log to audit table
@@ -66,7 +66,7 @@ if not df.empty:
         else:
             new_data[col] = cols[i].text_input(col, key=f"input_{col}")
 
-    if st.button("Add to Inventory"):
+    if st.button("Add to Inventory", key="add_item"):
         values = tuple(new_data[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
         sql = f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})"
@@ -75,39 +75,43 @@ if not df.empty:
         st.success("Item added!")
         st.rerun()
 
-# --- Edit Table with Deletions ---
+# --- Edit & Delete Items ---
 st.subheader("Edit & Delete Items")
 if df.empty:
     st.info("No data available.")
 else:
-    # Optional filter
-    filter_col = st.selectbox("Filter by column", df.columns.drop("rowid"))
-    filter_val = st.text_input("Contains:")
-    if filter_val:
-        df = df[df[filter_col].astype(str).str.contains(filter_val)]
+    st.markdown("### Filter Inventory")
+    filter_col = st.selectbox("Filter by column", df.columns.drop("rowid"), key="filter_col")
+    filter_val = st.text_input("Contains:", key="filter_val")
 
-    # Select editable rows
-    edited = st.data_editor(
-        df,
+    working_df = df.copy()
+    if filter_val:
+        working_df = df[df[filter_col].astype(str).str.contains(filter_val, case=False, na=False)]
+
+    # Editable table (excluding rowid)
+    editable_df = st.data_editor(
+        working_df.drop(columns="rowid"),
         num_rows="dynamic",
         use_container_width=True,
-        key="editor_table",
-        disabled=["rowid"]
+        key="editor_table"
     )
 
-    if st.button("Save Changes"):
+    if st.button("Save Changes", key="save_changes_btn"):
         cursor.execute("DELETE FROM equipment")
-        edited.drop(columns=["rowid"]).to_sql("equipment", conn, if_exists="append", index=False)
+        editable_df.to_sql("equipment", conn, if_exists="append", index=False)
         conn.commit()
         st.success("Changes saved.")
         st.rerun()
 
-    # Checkbox delete support
-    selected_rows = st.multiselect("Delete rows by ID", df["rowid"].tolist())
-    if st.button("Delete Selected") and selected_rows:
-        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in selected_rows])
+    # Correctly match rowids for deletion after filtering
+    st.markdown("### Delete Rows")
+    rowid_map = working_df[["rowid"]].reset_index(drop=True)
+    delete_idx = st.multiselect("Select rows to delete:", rowid_map.index.tolist(), key="delete_ids")
+    if st.button("Delete Selected", key="delete_btn") and delete_idx:
+        delete_ids = rowid_map.loc[delete_idx, "rowid"].tolist()
+        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in delete_ids])
         conn.commit()
-        st.success("Rows deleted.")
+        st.success(f"Deleted {len(delete_ids)} rows.")
         st.rerun()
 
 conn.close()
