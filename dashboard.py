@@ -2,145 +2,113 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import altair as alt
+from datetime import datetime, timedelta
 import os
-from datetime import datetime
 
-# --- Connect to DB ---
-DB_PATH = st.session_state.get("db_path", None)
+st.set_page_config(page_title="Equipment Dashboard", layout="wide")
+st.title("Equipment Dashboard")
+
+# --- DB Connection ---
+DB_PATH = st.session_state.get("db_path")
 if not DB_PATH or not os.path.exists(DB_PATH):
-    st.error("No dashboard loaded. Please log in and select a dashboard.")
+    st.error("No dashboard loaded. Please select a database.")
     st.stop()
 
 conn = sqlite3.connect(DB_PATH)
 
 # --- Load Data ---
-equipment_df = pd.read_sql_query("SELECT * FROM equipment", conn)
+def load_table(name):
+    try:
+        return pd.read_sql_query(f"SELECT * FROM {name}", conn)
+    except:
+        return pd.DataFrame()
 
-st.title("📊 Inventory Dashboard")
+equipment_df = load_table("equipment")
+maintenance_df = load_table("maintenance")
+scans_df = load_table("scanned_items")
 
-# --- KPI Cards ---
-st.subheader("Overview")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Total Items", len(equipment_df))
-with col2:
-    st.metric("Active", (equipment_df.status == "Active").sum())
-with col3:
-    st.metric("In Repair", (equipment_df.status == "In Repair").sum())
+# --- Sidebar Filters ---
+with st.sidebar:
+    st.header("📌 Filters")
 
-# --- Chart: Equipment by Status ---
-st.subheader("Equipment Status Distribution")
-status_chart = (
-    alt.Chart(equipment_df)
-    .mark_bar()
-    .encode(
-        x=alt.X("status:N", title="Status"),
-        y=alt.Y("count():Q", title="Count"),
-        color="status:N",
-        tooltip=["status:N", "count():Q"]
-    )
-    .properties(height=300)
-)
-st.altair_chart(status_chart, use_container_width=True)
-
-# --- Add New Inventory Form ---
-st.subheader("➕ Add New Equipment")
-with st.form("add_item_form"):
-    serial = st.text_input("Serial Number")
-    type_ = st.text_input("Type")
-    model = st.text_input("Model")
-    status = st.selectbox("Status", ["Active", "In Repair", "Retired"])
-    purchase_date = st.date_input("Purchase Date")
-    warranty_expiry = st.date_input("Warranty Expiry")
-    notes = st.text_area("Notes")
-    submit = st.form_submit_button("Add Equipment")
-
-    if submit:
-        try:
-            conn.execute(
-                "INSERT INTO equipment (serial_number, type, model, status, purchase_date, warranty_expiry, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (serial, type_, model, status, purchase_date.isoformat(), warranty_expiry.isoformat(), notes)
-            )
-            conn.commit()
-            st.success("Equipment added successfully.")
-        except sqlite3.IntegrityError:
-            st.error("Serial number already exists.")
-
-# --- Editable Table ---
-st.subheader("Edit Inventory Table")
-edited_df = st.data_editor(equipment_df, num_rows="dynamic", key="editable_inventory")
-
-if st.button("💾 Save Changes"):
-    edited_df.to_sql("equipment", conn, if_exists="replace", index=False)
-    st.success("Changes saved to database.")
-
-# --- Maintenance Log View ---
-st.subheader("🛠️ Maintenance Logs")
-conn.execute("""
-CREATE TABLE IF NOT EXISTS maintenance (
-    maintenance_id INTEGER PRIMARY KEY,
-    equipment_id INTEGER,
-    maintenance_type TEXT,
-    maintenance_date TEXT,
-    performed_by TEXT,
-    description TEXT,
-    next_scheduled TEXT,
-    FOREIGN KEY (equipment_id) REFERENCES equipment(equipment_id)
-);
-""")
-conn.commit()
-
-maintenance_df = pd.read_sql_query("SELECT * FROM maintenance", conn)
-
-with st.expander("📋 View Maintenance Records"):
-    st.dataframe(maintenance_df)
-
-st.subheader("➕ Log New Maintenance")
-with st.form("maintenance_form"):
-    eq_id = st.selectbox("Select Equipment ID", equipment_df.equipment_id)
-    maint_type = st.selectbox("Maintenance Type", ["Preventive", "Corrective"])
-    maint_date = st.date_input("Maintenance Date")
-    performed_by = st.text_input("Performed By")
-    description = st.text_area("Description")
-    next_sched = st.date_input("Next Scheduled")
-    submit_maint = st.form_submit_button("Add Maintenance Log")
-
-    if submit_maint:
-        conn.execute(
-            "INSERT INTO maintenance (equipment_id, maintenance_type, maintenance_date, performed_by, description, next_scheduled) VALUES (?, ?, ?, ?, ?, ?)",
-            (eq_id, maint_type, maint_date.isoformat(), performed_by, description, next_sched.isoformat())
-        )
-        conn.commit()
-        st.success("Maintenance log added.")
-
-# --- Barcode Scanner via Camera ---
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
-import cv2
-import numpy as np
-from pyzbar import pyzbar
-
-class BarcodeScanner(VideoTransformerBase):
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        decoded_objs = pyzbar.decode(img)
-        for obj in decoded_objs:
-            points = obj.polygon
-            pts = np.array([(pt.x, pt.y) for pt in points], np.int32)
-            cv2.polylines(img, [pts], isClosed=True, color=(0,255,0), thickness=2)
-            barcode_data = obj.data.decode("utf-8")
-            cv2.putText(img, barcode_data, (pts[0][0], pts[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
-            st.session_state.scanned_barcode = barcode_data
-        return img
-
-st.subheader("📷 Scan Barcode (Camera)")
-webrtc_streamer(key="barcode_stream", video_processor_factory=BarcodeScanner)
-
-if "scanned_barcode" in st.session_state:
-    st.success(f"Scanned Barcode: {st.session_state.scanned_barcode}")
-    match = equipment_df[equipment_df.serial_number == st.session_state.scanned_barcode]
-    if not match.empty:
-        st.write("Item Found:", match)
+    if not equipment_df.empty and "status" in equipment_df.columns:
+        selected_status = st.multiselect("Filter by Status", equipment_df["status"].dropna().unique())
     else:
-        st.warning("Item not found in database. Consider adding it manually.")
+        selected_status = []
+
+    date_range = st.date_input("Maintenance Date Range", (datetime.now() - timedelta(days=30), datetime.now()))
+
+# --- Inventory Block ---
+st.subheader("📦 Inventory Overview")
+
+if not equipment_df.empty:
+    if selected_status:
+        filtered_eq = equipment_df[equipment_df["status"].isin(selected_status)]
+    else:
+        filtered_eq = equipment_df
+
+    col1, col2 = st.columns(2)
+    col1.metric("Total Items", len(filtered_eq))
+    col2.metric("Unique Types", filtered_eq["type"].nunique() if "type" in filtered_eq.columns else 0)
+
+    st.dataframe(filtered_eq, use_container_width=True)
+
+    if "status" in filtered_eq.columns:
+        status_chart = (
+            alt.Chart(filtered_eq)
+            .mark_bar()
+            .encode(
+                x=alt.X("status:N", title="Status"),
+                y=alt.Y("count():Q", title="Count"),
+                color="status:N",
+                tooltip=["status:N", "count():Q"]
+            )
+        )
+        st.altair_chart(status_chart, use_container_width=True)
+else:
+    st.info("No equipment data available.")
+
+# --- Maintenance Block ---
+st.subheader("🛠 Maintenance Summary")
+
+if not maintenance_df.empty and "maintenance_date" in maintenance_df.columns:
+    maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
+
+    if date_range:
+        start, end = date_range
+        maintenance_df = maintenance_df[
+            (maintenance_df["maintenance_date"] >= pd.to_datetime(start)) &
+            (maintenance_df["maintenance_date"] <= pd.to_datetime(end))
+        ]
+
+    st.dataframe(maintenance_df, use_container_width=True)
+
+    if "maintenance_type" in maintenance_df.columns:
+        maint_chart = (
+            alt.Chart(maintenance_df)
+            .mark_bar()
+            .encode(
+                x="maintenance_type:N",
+                y="count():Q",
+                color="maintenance_type:N",
+                tooltip=["maintenance_type", "count()"]
+            )
+        )
+        st.altair_chart(maint_chart, use_container_width=True)
+else:
+    st.info("No maintenance data found.")
+
+# --- Scans Block ---
+st.subheader("📷 Scan Activity")
+
+if not scans_df.empty and "timestamp" in scans_df.columns:
+    scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"])
+    scans_df["date"] = scans_df["timestamp"].dt.date
+    scan_summary = scans_df.groupby("date").size().reset_index(name="scans")
+
+    st.line_chart(scan_summary.set_index("date"))
+    st.dataframe(scans_df, use_container_width=True)
+else:
+    st.info("No scan data available.")
 
 conn.close()
