@@ -4,118 +4,91 @@ import sqlite3
 import altair as alt
 import os
 from datetime import datetime
-from streamlit_sortable import sortable
+from streamlit_dragzone import dragzone
 
+# --- Setup ---
 st.set_page_config(page_title="Custom Dashboard", layout="wide")
-st.title("Equipment Dashboard")
+st.title("📊 Equipment Dashboard")
 
-# --- Get user role and email ---
-user_email = st.session_state.get("user_email", "unknown@example.com")
-user_role = st.session_state.get("user_role", "guest")
-
-st.sidebar.markdown(f" Role: {user_role} | Email: {user_email}")
-
-if "user_email" not in st.session_state or "user_role" not in st.session_state:
-    st.error("User not recognized. Please go to the main page and log in again.")
+# --- DB Connection ---
+db_path = st.session_state.get("db_path")
+if not db_path or not os.path.exists(db_path):
+    st.error("No database selected. Please choose one from the main page.")
     st.stop()
 
-# --- DB Validation ---
-DB_PATH = st.session_state.get("db_path")
-if not DB_PATH or not os.path.exists(DB_PATH):
-    st.error("No database selected. Please select one from the main page.")
-    st.stop()
+conn = sqlite3.connect(db_path)
 
-conn = sqlite3.connect(DB_PATH)
-
-# --- Load Tables ---
-def try_load(table):
+def load_table(name):
     try:
-        return pd.read_sql(f"SELECT * FROM {table}", conn)
+        return pd.read_sql_query(f"SELECT * FROM {name}", conn)
     except:
         return pd.DataFrame()
 
-equipment_df = try_load("equipment")
-maintenance_df = try_load("maintenance_log")
-scan_df = try_load("scanned_items")
-
-# --- User Layout Session ---
-if "dashboard_layout" not in st.session_state:
-    st.session_state.dashboard_layout = ["KPI", "Status Chart", "Maintenance History", "Scan Trend"]
-
-# --- Sortable Layout ---
-blocks = {
-    "KPI": lambda: show_kpis(equipment_df),
-    "Status Chart": lambda: show_status_chart(equipment_df),
-    "Maintenance History": lambda: show_maintenance_timeline(maintenance_df),
-    "Scan Trend": lambda: show_scan_trend(scan_df),
-}
-
-order = sortable(
-    st.session_state.dashboard_layout,
-    direction="vertical",
-    label="📦 Drag to rearrange dashboard blocks",
-    key="dashboard_sort",
-    ghost_style={"backgroundColor": "#f0f0f0"},
-)
-
-# Render blocks in order
-for name in order:
-    if name in blocks:
-        st.markdown(f"### {name}")
-        blocks[name]()
-        st.markdown("---")
-
-st.session_state.dashboard_layout = order
-
-# --- Chart Functions ---
-def show_kpis(df):
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Items", len(df))
-    if "status" in df.columns:
-        col2.metric("Active", df[df["status"].str.lower() == "active"].shape[0])
-        col3.metric("In Repair", df[df["status"].str.lower() == "in repair"].shape[0])
-    else:
-        col2.metric("Active", "N/A")
-        col3.metric("In Repair", "N/A")
-
-def show_status_chart(df):
-    if "status" in df.columns:
-        chart_data = df["status"].value_counts().reset_index()
-        chart_data.columns = ["status", "count"]
-        chart = (
-            alt.Chart(chart_data)
-            .mark_bar()
-            .encode(x="status", y="count", color="status", tooltip=["status", "count"])
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.warning("No 'status' column found.")
-
-def show_maintenance_timeline(df):
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df.dropna(subset=["date"])
-        timeline = (
-            alt.Chart(df)
-            .mark_bar()
-            .encode(x="date:T", y="count()", tooltip=["date"])
-        )
-        st.altair_chart(timeline, use_container_width=True)
-    else:
-        st.info("No valid maintenance log date found.")
-
-def show_scan_trend(df):
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        df["date"] = df["timestamp"].dt.date
-        trend = df.groupby("date").size().reset_index(name="scans")
-        chart = (
-            alt.Chart(trend)
-            .mark_line(point=True)
-            .encode(x="date:T", y="scans:Q", tooltip=["date", "scans"])
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No timestamp data available.")
+equipment_df = load_table("equipment")
+maintenance_df = load_table("maintenance")
+scans_df = load_table("scanned_items")
 
 conn.close()
+
+# --- User Control ---
+with st.expander("🎛️ Build Your Dashboard"):
+    selected_widgets = dragzone(
+        items=[
+            {"id": "status_chart", "content": "📊 Equipment Status Chart"},
+            {"id": "inventory_table", "content": "📋 Equipment Table"},
+            {"id": "maintenance_chart", "content": "🛠 Maintenance Logs Chart"},
+            {"id": "scan_chart", "content": "📷 Barcode Scan Timeline"},
+        ],
+        drop_style={"background-color": "#f0f2f6", "padding": "1rem"}
+    )
+
+st.markdown("---")
+
+# --- Render Widgets ---
+for item in selected_widgets:
+    if item == "status_chart" and "status" in equipment_df.columns:
+        st.subheader("📊 Equipment by Status")
+        chart = alt.Chart(equipment_df).mark_bar().encode(
+            x=alt.X("status:N", title="Status"),
+            y=alt.Y("count():Q", title="Count"),
+            color="status:N",
+            tooltip=["status", "count()"]
+        ).transform_aggregate(
+            count='count()',
+            groupby=["status"]
+        ).properties(height=300)
+        st.altair_chart(chart, use_container_width=True)
+
+    elif item == "inventory_table":
+        st.subheader("📋 Inventory Data")
+        st.dataframe(equipment_df, use_container_width=True)
+
+    elif item == "maintenance_chart" and not maintenance_df.empty:
+        st.subheader("🛠 Maintenance Timeline")
+        if "maintenance_date" in maintenance_df.columns:
+            maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
+            line = alt.Chart(maintenance_df).mark_bar().encode(
+                x=alt.X("maintenance_date:T", title="Date"),
+                y=alt.Y("count():Q", title="Events"),
+                tooltip=["maintenance_date", "count()"]
+            ).transform_aggregate(
+                count='count()',
+                groupby=["maintenance_date"]
+            )
+            st.altair_chart(line, use_container_width=True)
+
+    elif item == "scan_chart" and not scans_df.empty:
+        st.subheader("📷 Scans Over Time")
+        if "timestamp" in scans_df.columns:
+            scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
+            scans_df["date"] = scans_df["timestamp"].dt.date
+            scan_data = scans_df.groupby("date").size().reset_index(name="scan_count")
+            chart = alt.Chart(scan_data).mark_line(point=True).encode(
+                x="date:T",
+                y="scan_count:Q",
+                tooltip=["date", "scan_count"]
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+st.markdown("---")
+st.caption("Drag and reorder widgets above to customize your dashboard.")
