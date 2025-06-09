@@ -87,47 +87,41 @@ st.markdown(f"Current DB: `{st.session_state.selected_db}`")
 # --- App Body ---
 st.title("Equipment & Inventory Tracking System")
 
-# --- Upload CSV ---
-st.subheader("Upload Inventory CSV")
-uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+# --- Upload File ---
+st.subheader("Upload Inventory File")
+uploaded_file = st.file_uploader("Upload inventory data", type=["csv", "xlsx", "xls", "tsv", "json"])
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    file_type = uploaded_file.name.split(".")[-1].lower()
 
-    # Save to SQLite immediately
-    conn = sqlite3.connect(st.session_state.db_path)
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS equipment (
-        equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        serial_number TEXT,
-        type TEXT,
-        model TEXT,
-        status TEXT,
-        purchase_date TEXT,
-        warranty_expiry TEXT,
-        notes TEXT
-    )
-    """)
-    conn.commit()
+    try:
+        if file_type == "csv":
+            df = pd.read_csv(uploaded_file)
+        elif file_type == "tsv":
+            df = pd.read_csv(uploaded_file, sep="\t")
+        elif file_type in ["xlsx", "xls"]:
+            df = pd.read_excel(uploaded_file)
+        elif file_type == "json":
+            df = pd.read_json(uploaded_file)
+        else:
+            st.error("Unsupported file type.")
+            st.stop()
 
-    df.to_sql("equipment", conn, if_exists="append", index=False)
-    conn.commit()
+        # Save to SQLite
+        conn = sqlite3.connect(st.session_state.db_path)
+        df.to_sql("equipment", conn, if_exists="replace", index=False)
+        conn.commit()
 
-    st.success(f"Uploaded and saved {len(df)} rows to the database.")
+        st.success(f"Uploaded and saved {len(df)} rows to the database.")
+        st.dataframe(df)
 
-    # Reload and show from DB
-    df_reload = pd.read_sql("SELECT * FROM equipment", conn)
-    st.dataframe(df_reload)
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("Download Inventory as CSV", csv, "inventory_export.csv", mime="text/csv")
 
-    # Download button
-    csv = df_reload.to_csv(index=False).encode("utf-8")
-    st.download_button("Download Inventory as CSV", csv, file_name="inventory_export.csv", mime="text/csv")
-
-    conn.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Failed to process file: {e}")
 else:
     # Show existing data if available
-    if "db_path" not in st.session_state:
-        st.warning("Database path not set. Please select a database.")
-        st.stop()
     conn = sqlite3.connect(st.session_state.db_path)
     try:
         existing_df = pd.read_sql("SELECT * FROM equipment", conn)
@@ -135,10 +129,9 @@ else:
             st.subheader("Existing Inventory Data")
             st.dataframe(existing_df)
 
-            # Download existing data
             csv = existing_df.to_csv(index=False).encode("utf-8")
             st.download_button("Download Inventory as CSV", csv, file_name="inventory_export.csv", mime="text/csv")
     except Exception:
-        st.info("No inventory data found. Upload a CSV to get started.")
+        st.info("No inventory data found. Upload a file to get started.")
     finally:
         conn.close()
