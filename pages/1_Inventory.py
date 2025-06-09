@@ -17,6 +17,9 @@ cursor = conn.cursor()
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.get("user_role", "guest")
 
+st.write("DEBUG: Logged in as", st.session_state.get("user_email", "N/A"))
+st.write("DEBUG: Role is", user_role)
+
 # Load data
 def load_data():
     try:
