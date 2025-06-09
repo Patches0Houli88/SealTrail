@@ -39,7 +39,9 @@ st.sidebar.write(f"Role: {user_role.capitalize()}")
 
 selected_db = None
 if db_files:
-    selected_db = st.selectbox("Choose a database to work with", db_files)
+    selected_db = st.selectbox("Choose a database to work with", db_files, index=0)
+    if selected_db:
+        st.session_state.selected_db = selected_db
     if selected_db:
         st.session_state.selected_db = selected_db
 
