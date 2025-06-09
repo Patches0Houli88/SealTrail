@@ -6,6 +6,15 @@ import pandas as pd
 st.title("Barcode Scanner")
 st.write("Scan equipment codes using your camera. If unsupported, manually enter a code.")
 
+# --- Get user role and email ---
+user_email = st.session_state.get("user_email", "unknown@example.com")
+user_role = st.session_state.get("user_role", "guest")
+
+st.sidebar.markdown(f" Role: {user_role} | Email: {user_email}")
+
+if "user_email" not in st.session_state or "user_role" not in st.session_state:
+    st.error("User not recognized. Please go to the main page and log in again.")
+    st.stop()
 # Ensure active database
 if "db_path" not in st.session_state:
     st.warning("No database selected. Please upload data first in the main page.")
