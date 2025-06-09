@@ -135,3 +135,27 @@ else:
         st.info("No inventory data found. Upload a file to get started.")
     finally:
         conn.close()
+
+# --- Condensed Dashboard ---
+st.subheader("Dashboard Summary")
+with sqlite3.connect(st.session_state.db_path) as conn:
+    # Inventory count
+    try:
+        df = pd.read_sql("SELECT * FROM equipment", conn)
+        st.metric("Inventory Items", len(df))
+    except:
+        st.info("No inventory data yet.")
+
+    # Maintenance count
+    try:
+        logs = pd.read_sql("SELECT * FROM maintenance_log", conn)
+        st.metric("Maintenance Logs", len(logs))
+    except:
+        st.info("No maintenance logs yet.")
+
+    # Scans count
+    try:
+        scans = pd.read_sql("SELECT * FROM scanned_items", conn)
+        st.metric("Scans Logged", len(scans))
+    except:
+        st.info("No scan records yet.")
