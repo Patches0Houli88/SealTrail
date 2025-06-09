@@ -27,7 +27,7 @@ if "user_role" not in st.session_state:
 
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.user_role
-
+st.caption(f"🔍 Role: {user_role} | Email: {user_email}")
 # --- Load Data ---
 def load_data():
     try:
