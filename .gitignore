@@ -1,8 +1,11 @@
 # Ignore all SQLite database files
 *.db
 
-# Ignore user-generated data
+# Ignore user-generated data directories
 data/
+
+# Ignore user role config (contains emails and permissions)
+roles.yaml
 
 # Ignore Python cache
 __pycache__/
@@ -10,3 +13,7 @@ __pycache__/
 
 # Optional: Ignore Jupyter notebooks (if you use them locally)
 *.ipynb
+
+# Streamlit secrets and logs
+.streamlit/secrets.toml
+*.log
