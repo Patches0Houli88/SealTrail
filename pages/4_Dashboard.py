@@ -8,7 +8,7 @@ from fpdf import FPDF
 import os
 
 st.set_page_config(page_title="Full Dashboard", layout="wide")
-st.title("📊 Equipment & Inventory Dashboard")
+st.title("Equipment Dashboard")
 
 # --- Get user role and email ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
@@ -20,129 +20,61 @@ if "user_email" not in st.session_state or "user_role" not in st.session_state:
     st.error("User not recognized. Please go to the main page and log in again.")
     st.stop()
 
-# Set DB
-if "db_path" not in st.session_state:
-    st.warning("No database selected. Please select one from the main page.")
+# --- Connect to DB ---
+DB_PATH = st.session_state.get("db_path", None)
+if not DB_PATH or not os.path.exists(DB_PATH):
+    st.error("No dashboard loaded. Please log in and select a dashboard.")
     st.stop()
 
-# Role-based logic
-user_email = st.session_state.get("user_email", "unknown@example.com")
-user_role = "guest"
-
-if os.path.exists("roles.yaml"):
-    import yaml
-    with open("roles.yaml") as f:
-        roles = yaml.safe_load(f)
-    user_info = roles.get("users", {}).get(user_email, {})
-    user_role = user_info.get("role", "guest")
-
-conn = sqlite3.connect(st.session_state.db_path)
+conn = sqlite3.connect(DB_PATH)
 
 # --- Load Data ---
 try:
-    equipment_df = pd.read_sql("SELECT * FROM equipment", conn)
+    equipment_df = pd.read_sql_query("SELECT * FROM equipment", conn)
 except:
     equipment_df = pd.DataFrame()
 
-try:
-    maintenance_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
-except:
-    maintenance_df = pd.DataFrame()
+st.title("📊 Inventory Dashboard")
 
-try:
-    scans_df = pd.read_sql("SELECT * FROM scanned_items", conn)
-except:
-    scans_df = pd.DataFrame()
+# --- KPI Cards ---
+st.subheader("Overview")
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Total Items", len(equipment_df))
+
+if "status" in equipment_df.columns:
+    with col2:
+        st.metric("Active", equipment_df[equipment_df["status"].str.lower() == "active"].shape[0])
+    with col3:
+        st.metric("In Repair", equipment_df[equipment_df["status"].str.lower() == "in repair"].shape[0])
+else:
+    with col2:
+        st.metric("Active", 0)
+    with col3:
+        st.metric("In Repair", 0)
+
+# --- Chart: Equipment by Status ---
+st.subheader("Equipment Status Distribution")
+if "status" in equipment_df.columns:
+    try:
+        status_counts = equipment_df["status"].value_counts().reset_index()
+        status_counts.columns = ["status", "count"]
+
+        status_chart = (
+            alt.Chart(status_counts)
+            .mark_bar()
+            .encode(
+                x=alt.X("status:N", title="Status"),
+                y=alt.Y("count:Q", title="Count"),
+                color="status:N",
+                tooltip=["status:N", "count:Q"]
+            )
+            .properties(height=300)
+        )
+        st.altair_chart(status_chart, use_container_width=True)
+    except Exception as e:
+        st.error(f"Could not generate chart: {e}")
+else:
+    st.info("No 'status' column found for visualization.")
 
 conn.close()
-
-tab1, tab2, tab3 = st.tabs(["📦 Inventory", "🛠 Maintenance", "📷 Barcode Scans"])
-
-# --- Inventory Tab ---
-with tab1:
-    st.subheader("Inventory Overview")
-    if not equipment_df.empty:
-        st.dataframe(equipment_df)
-
-        # Pie Chart by Status (Only if available)
-        if "status" in equipment_df.columns:
-            status_chart = (
-                alt.Chart(equipment_df)
-                .mark_arc()
-                .encode(
-                    theta=alt.Theta(field="count", type="quantitative"),
-                    color=alt.Color(field="status", type="nominal"),
-                    tooltip=["status", "count"],
-                )
-                .transform_aggregate(
-                    count='count()',
-                    groupby=["status"]
-                )
-            )
-            st.altair_chart(status_chart, use_container_width=True)
-        else:
-            st.warning("No 'status' column found to create the pie chart.")
-    else:
-        st.info("No inventory data to display.")
-
-# --- Maintenance Tab ---
-with tab2:
-    st.subheader("Maintenance Logs")
-    if not maintenance_df.empty:
-        if "date" in maintenance_df.columns:
-            maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
-
-            default_start = datetime.today() - timedelta(days=30)
-            default_end = datetime.today()
-
-            start, end = st.date_input(
-                "Filter maintenance by date",
-                (default_start, default_end),
-                key="maintenance_date_range"
-            )
-
-            if start and end:
-                maintenance_df = maintenance_df[
-                    (maintenance_df["date"] >= pd.to_datetime(start)) &
-                    (maintenance_df["date"] <= pd.to_datetime(end))
-                ]
-
-        st.dataframe(maintenance_df)
-
-        if "equipment_id" in maintenance_df.columns:
-            chart = (
-                alt.Chart(maintenance_df)
-                .mark_bar()
-                .encode(
-                    x="equipment_id:N",
-                    y="count():Q",
-                    tooltip=["equipment_id", "count()"]
-                )
-            )
-            st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No maintenance logs available.")
-
-# --- Scans Tab ---
-with tab3:
-    st.subheader("Barcode Scan History")
-    if not scans_df.empty:
-        st.dataframe(scans_df)
-
-        if "timestamp" in scans_df.columns:
-            scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"])
-            scans_df["date"] = scans_df["timestamp"].dt.date
-            daily_counts = scans_df.groupby("date").size().reset_index(name="scan_count")
-
-            chart = (
-                alt.Chart(daily_counts)
-                .mark_line(point=True)
-                .encode(
-                    x="date:T",
-                    y="scan_count:Q",
-                    tooltip=["date", "scan_count"]
-                )
-            )
-            st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No barcode scan data found.")
