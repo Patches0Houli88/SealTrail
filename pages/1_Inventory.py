@@ -2,6 +2,8 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import os
+import yaml
 
 st.set_page_config(page_title="Inventory", layout="wide")
 st.title("Inventory Management")
@@ -17,8 +19,16 @@ cursor = conn.cursor()
 user_email = st.session_state.get("user_email", "")
 user_role = st.session_state.get("user_role", "guest")
 
-st.write("DEBUG: Logged in as", st.session_state.get("user_email", "N/A"))
-st.write("DEBUG: Role is", user_role)
+# Fallback role load
+if "user_role" not in st.session_state:
+    email = st.session_state.get("user_email", "unknown@example.com")
+    roles_config = {}
+    if os.path.exists("roles.yaml"):
+        with open("roles.yaml") as f:
+            roles_config = yaml.safe_load(f)
+    st.session_state.user_role = roles_config.get("users", {}).get(email, {}).get("role", "guest")
+
+user_role = st.session_state.user_role
 
 # Load data
 def load_data():
