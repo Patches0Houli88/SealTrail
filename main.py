@@ -36,7 +36,6 @@ if user_email not in roles_config["users"]:
     with open("roles.yaml", "w") as f:
         yaml.safe_dump(roles_config, f)
 
-# User role and DB permissions
 user_role = roles_config["users"][user_email]["role"]
 allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
 
@@ -46,13 +45,10 @@ os.makedirs(user_dir, exist_ok=True)
 
 # --- Sidebar: Role and DB Management ---
 st.sidebar.write(f"Role: {user_role.capitalize()}")
-
-# Find existing DBs
-db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
+db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
 if allowed_dbs != ["all"]:
     db_files = [db for db in db_files if db in allowed_dbs]
 
-# --- Select DB ---
 if db_files:
     selected_db = st.sidebar.selectbox("Choose a database", db_files)
     st.session_state.selected_db = selected_db
@@ -68,24 +64,18 @@ if st.sidebar.button("Create DB") and new_db_name:
     if not os.path.exists(full_path):
         open(full_path, "w").close()
         st.session_state.selected_db = new_db_name
-
-        # Add DB to user's allowed list
         if user_role != "admin":
             roles_config["users"][user_email]["allowed_dbs"].append(new_db_name)
             with open("roles.yaml", "w") as f:
                 yaml.safe_dump(roles_config, f)
-
         st.success(f"Created: {new_db_name}")
         st.rerun()
     else:
         st.sidebar.error("Database already exists.")
 
-# --- Delete DBs (only user-owned or all if admin) ---
+# --- Delete DBs ---
 if db_files:
-    deletable = (
-        db_files if user_role == "admin"
-        else [db for db in db_files if db in allowed_dbs]
-    )
+    deletable = db_files if user_role == "admin" else [db for db in db_files if db in allowed_dbs]
     with st.sidebar.expander("Delete Database"):
         db_to_delete = st.selectbox("Delete which?", deletable)
         if st.button("Delete DB"):
@@ -125,12 +115,26 @@ if uploaded_file:
             st.error("Unsupported file type.")
             st.stop()
 
+        # Check for table structure mismatch
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        try:
+            existing_cols = pd.read_sql("SELECT * FROM equipment LIMIT 1", conn).columns.tolist()
+            st.warning("Column mismatch detected. Please map your columns.")
+            col_mapping = {}
+            for col in existing_cols:
+                col_mapping[col] = st.selectbox(f"Map '{col}' to:", df.columns, key=col)
+            df = df.rename(columns=col_mapping)[existing_cols]  # reorder to match
+        except:
+            pass
+
         st.dataframe(df)
 
         if st.button("Save to DB"):
-            with sqlite3.connect(db_path) as conn:
-                df.to_sql("equipment", conn, if_exists="replace", index=False)
+            df.to_sql("equipment", conn, if_exists="replace", index=False)
+            conn.commit()
             st.success("Saved to DB.")
+        conn.close()
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
@@ -146,7 +150,7 @@ except:
     st.info("No inventory data found.")
 
 # --- Dashboard Summary ---
-st.subheader("📊 Dashboard Summary")
+st.subheader("\U0001F4CA Dashboard Summary")
 with sqlite3.connect(db_path) as conn:
     try:
         st.metric("Inventory Items", pd.read_sql("SELECT COUNT(*) as count FROM equipment", conn)["count"][0])
