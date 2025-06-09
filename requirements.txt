@@ -7,4 +7,3 @@ streamlit-qrcode-scanner
 opencv-python-headless
 PyYAML
 fpdf==1.7.2
-streamlit-sortable
