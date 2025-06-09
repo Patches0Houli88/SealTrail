@@ -106,10 +106,11 @@ if uploaded_file:
             st.error("Unsupported file type.")
             st.stop()
 
-        # Save to SQLite
+        # Auto-save to SQLite
         conn = sqlite3.connect(st.session_state.db_path)
         df.to_sql("equipment", conn, if_exists="replace", index=False)
         conn.commit()
+        conn.close()
 
         st.success(f"Uploaded and saved {len(df)} rows to the database.")
         st.dataframe(df)
@@ -117,7 +118,14 @@ if uploaded_file:
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("Download Inventory as CSV", csv, "inventory_export.csv", mime="text/csv")
 
-        conn.close()
+        # Optional manual save
+        if st.button("Save to DB"):
+            conn = sqlite3.connect(st.session_state.db_path)
+            df.to_sql("equipment", conn, if_exists="replace", index=False)
+            conn.commit()
+            conn.close()
+            st.success("Data manually saved to the database.")
+
     except Exception as e:
         st.error(f"Failed to process file: {e}")
 else:
@@ -136,26 +144,23 @@ else:
     finally:
         conn.close()
 
-# --- Condensed Dashboard ---
-st.subheader("Dashboard Summary")
+# --- Condensed Dashboard Summary ---
+st.subheader("📊 Quick Dashboard")
 with sqlite3.connect(st.session_state.db_path) as conn:
-    # Inventory count
     try:
-        df = pd.read_sql("SELECT * FROM equipment", conn)
-        st.metric("Inventory Items", len(df))
+        items_df = pd.read_sql("SELECT * FROM equipment", conn)
+        st.metric("Inventory Items", len(items_df))
     except:
-        st.info("No inventory data yet.")
+        st.info("No inventory data.")
 
-    # Maintenance count
     try:
-        logs = pd.read_sql("SELECT * FROM maintenance_log", conn)
-        st.metric("Maintenance Logs", len(logs))
+        logs_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
+        st.metric("Maintenance Logs", len(logs_df))
     except:
-        st.info("No maintenance logs yet.")
+        st.info("No maintenance logs.")
 
-    # Scans count
     try:
-        scans = pd.read_sql("SELECT * FROM scanned_items", conn)
-        st.metric("Scans Logged", len(scans))
+        scans_df = pd.read_sql("SELECT * FROM scanned_items", conn)
+        st.metric("Barcode Scans", len(scans_df))
     except:
-        st.info("No scan records yet.")
+        st.info("No scan data.")
