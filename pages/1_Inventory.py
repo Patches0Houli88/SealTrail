@@ -8,6 +8,10 @@ from datetime import datetime
 st.set_page_config(page_title="Inventory", layout="wide")
 st.title("Inventory Management")
 
+# --- Get user role and email ---
+user_email = st.session_state.get("user_email", "unknown@example.com")
+user_role = st.session_state.get("user_role", "guest")
+
 # --- Check for active DB ---
 if "db_path" not in st.session_state:
     st.warning("No database selected. Please choose one from the main page.")
