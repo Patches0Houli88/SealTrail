@@ -1,93 +1,79 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
+import sqlite3
+import os
 
 st.set_page_config(page_title="Inventory", layout="wide")
-st.title("Inventory Management")
+st.title("📦 Inventory Management")
 
+# --- Ensure DB is selected ---
 if "db_path" not in st.session_state:
-    st.warning("No database selected. Please choose one from the main page.")
+    st.error("No database selected.")
     st.stop()
 
 conn = sqlite3.connect(st.session_state.db_path)
-cursor = conn.cursor()
 
-# Load existing data
-def load_data():
+# --- Load inventory table ---
+try:
+    df = pd.read_sql("SELECT rowid AS id, * FROM equipment", conn)
+    df.set_index("id", inplace=True)
+except:
+    st.warning("No inventory data found.")
+    conn.close()
+    st.stop()
+
+# --- Editable Table with Filters ---
+st.subheader("Edit Inventory")
+edited_df = st.data_editor(
+    df,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="edit_table",
+    column_config={
+        col: st.column_config.Column(label=col, width="medium") for col in df.columns
+    },
+    hide_index=False,
+)
+
+# --- Save Changes ---
+if st.button("💾 Save Changes"):
     try:
-        df = pd.read_sql("SELECT rowid, * FROM equipment", conn)
-        return df
-    except Exception:
-        return pd.DataFrame()
+        edited_df.reset_index(drop=True, inplace=True)
+        edited_df.to_sql("equipment", conn, if_exists="replace", index=False)
+        st.success("Changes saved successfully.")
+    except Exception as e:
+        st.error(f"Failed to save: {e}")
 
-df = load_data()
+# --- Deletion Logic ---
+selected_rows = st.multiselect("Select rows to delete by ID", options=df.index.tolist())
 
-# --- Add New Inventory Item ---
-st.subheader("Add New Item")
-with st.form("add_form"):
-    if df.empty:
-        st.info("No data found in inventory table to infer columns.")
-        st.stop()
-
-    col_names = df.columns.drop("rowid")
-    new_values = {}
-    col_layout = st.columns(len(col_names))
-
-    for i, col in enumerate(col_names):
-        unique_vals = df[col].dropna().unique().tolist()
-        if 1 < len(unique_vals) < 20:
-            new_values[col] = col_layout[i].selectbox(col, unique_vals + ["<Other>"])
-            if new_values[col] == "<Other>":
-                new_values[col] = col_layout[i].text_input(f"Enter custom {col}")
-        else:
-            new_values[col] = col_layout[i].text_input(col)
-
-    submitted = st.form_submit_button("Add to Inventory")
-    if submitted:
-        values = tuple(new_values[col] for col in col_names)
-        placeholders = ', '.join('?' for _ in values)
-        sql = f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})"
-        cursor.execute(sql, values)
-        conn.commit()
-        st.success("Item added!")
-        st.rerun()
-
-# --- Edit Inventory ---
-st.subheader("Edit Items")
-if df.empty:
-    st.info("No data available to edit.")
-else:
-    st.markdown("### Filter Inventory")
-    filter_col = st.selectbox("Select column to filter by", df.columns.drop("rowid"))
-    filter_value = st.text_input("Filter value contains:")
-
-    if filter_value:
-        filtered_df = df[df[filter_col].astype(str).str.contains(filter_value, na=False)]
+if st.button("🗑️ Delete Selected"):
+    if not selected_rows:
+        st.warning("No rows selected.")
     else:
-        filtered_df = df.copy()
-
-    editable_df = st.data_editor(
-        filtered_df.drop(columns="rowid"),
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor"
-    )
-
-    if st.button("Save Changes"):
-        cursor.execute("DELETE FROM equipment")
-        editable_df.to_sql("equipment", conn, if_exists="append", index=False)
-        conn.commit()
-        st.success("Changes saved.")
+        updated_df = df.drop(index=selected_rows)
+        updated_df.reset_index(drop=True, inplace=True)
+        updated_df.to_sql("equipment", conn, if_exists="replace", index=False)
+        st.success(f"Deleted {len(selected_rows)} row(s).")
         st.rerun()
 
-# --- Delete Items ---
-st.subheader("Delete Items")
-if not df.empty:
-    delete_ids = st.multiselect("Select items to delete:", df["rowid"].tolist())
-    if st.button("Delete Selected") and delete_ids:
-        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in delete_ids])
-        conn.commit()
-        st.success("Selected items deleted.")
+# --- Manual Add Section ---
+st.subheader("➕ Add New Inventory Item")
+with st.form("add_form", clear_on_submit=True):
+    new_row = {}
+    for col in df.columns:
+        unique_vals = sorted(df[col].dropna().astype(str).unique())
+        if len(unique_vals) <= 20:
+            new_row[col] = st.selectbox(col, options=unique_vals + ["Other"], key=col)
+        else:
+            new_row[col] = st.text_input(col, key=col)
+
+    submitted = st.form_submit_button("Add")
+    if submitted:
+        new_df = pd.DataFrame([new_row])
+        combined = pd.concat([df.reset_index(drop=True), new_df], ignore_index=True)
+        combined.to_sql("equipment", conn, if_exists="replace", index=False)
+        st.success("New item added.")
         st.rerun()
 
 conn.close()
