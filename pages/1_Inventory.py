@@ -12,23 +12,63 @@ if "db_path" not in st.session_state:
 conn = sqlite3.connect(st.session_state.db_path)
 cursor = conn.cursor()
 
-# Load existing data
+# Load data
 def load_data():
     try:
         df = pd.read_sql("SELECT rowid, * FROM equipment", conn)
         return df
-    except Exception:
+    except:
         return pd.DataFrame()
 
 df = load_data()
 
-# --- Add New Inventory Item ---
-st.subheader("Add New Item")
-with st.form("add_form"):
-    if df.empty:
-        st.info("No data found in inventory table to infer columns.")
-        st.stop()
+# ----------------- Column Management -------------------
+st.subheader("🛠 Manage Columns")
 
+with st.expander("Add a Column"):
+    new_col = st.text_input("New column name")
+    new_col_type = st.selectbox("Data type", ["TEXT", "INTEGER", "REAL"])
+    if st.button("Add Column"):
+        if new_col:
+            try:
+                cursor.execute(f"ALTER TABLE equipment ADD COLUMN {new_col} {new_col_type}")
+                conn.commit()
+                st.success(f"Added column `{new_col}` of type {new_col_type}.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+with st.expander("Rename Column"):
+    if not df.empty:
+        col_to_rename = st.selectbox("Select column", df.columns.drop("rowid"))
+        new_name = st.text_input("New column name")
+        if st.button("Rename Column"):
+            try:
+                # SQLite doesn't support native RENAME COLUMN, use workaround
+                df_renamed = df.rename(columns={col_to_rename: new_name})
+                df_renamed.drop(columns="rowid").to_sql("equipment", conn, if_exists="replace", index=False)
+                st.success(f"Renamed column `{col_to_rename}` to `{new_name}`.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Rename failed: {e}")
+
+with st.expander("Delete Column"):
+    if not df.empty:
+        col_to_delete = st.selectbox("Select column to delete", df.columns.drop("rowid"))
+        if st.button("Delete Column"):
+            try:
+                df_dropped = df.drop(columns=[col_to_delete])
+                df_dropped.drop(columns="rowid").to_sql("equipment", conn, if_exists="replace", index=False)
+                st.success(f"Deleted column `{col_to_delete}`.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error deleting column: {e}")
+
+# ----------------- Add New Inventory -------------------
+st.subheader("➕ Add New Item")
+if df.empty:
+    st.info("No existing data found to determine columns.")
+else:
     col_names = df.columns.drop("rowid")
     new_values = {}
     col_layout = st.columns(len(col_names))
@@ -42,8 +82,7 @@ with st.form("add_form"):
         else:
             new_values[col] = col_layout[i].text_input(col)
 
-    submitted = st.form_submit_button("Add to Inventory")
-    if submitted:
+    if st.button("Add to Inventory"):
         values = tuple(new_values[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
         sql = f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})"
@@ -52,11 +91,9 @@ with st.form("add_form"):
         st.success("Item added!")
         st.rerun()
 
-# --- Edit Inventory with Filters ---
-st.subheader("Edit Items")
-if df.empty:
-    st.info("No data available to edit.")
-else:
+# ----------------- Edit Items -------------------
+st.subheader("✏️ Edit Items")
+if not df.empty:
     st.markdown("### Filter Inventory")
     filter_col = st.selectbox("Select column to filter by", df.columns.drop("rowid"))
     filter_value = st.text_input("Filter value contains:")
@@ -66,7 +103,6 @@ else:
     else:
         filtered_df = df.copy()
 
-    st.markdown("### Inline Edit Table")
     editable_df = st.data_editor(
         filtered_df.drop(columns="rowid"),
         num_rows="dynamic",
@@ -81,23 +117,14 @@ else:
         st.success("Changes saved.")
         st.rerun()
 
-# --- Delete Inventory Items ---
-st.subheader("Delete Items")
+# ----------------- Delete Items -------------------
+st.subheader("❌ Delete Items")
 if not df.empty:
-    st.markdown("### Select Rows to Delete")
-    delete_df = df.copy()
-    delete_df["select"] = False
-    selection = st.data_editor(delete_df, column_order=["select"] + list(df.columns), use_container_width=True, key="delete_selector")
-
-    selected_ids = selection[selection["select"] == True]["rowid"].tolist()
-
-    if st.button("Delete Selected"):
-        if selected_ids:
-            cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in selected_ids])
-            conn.commit()
-            st.success(f"Deleted {len(selected_ids)} items.")
-            st.rerun()
-        else:
-            st.warning("No items selected.")
+    delete_ids = st.multiselect("Select items to delete", df["rowid"].tolist())
+    if st.button("Delete Selected") and delete_ids:
+        cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(i,) for i in delete_ids])
+        conn.commit()
+        st.success("Selected items deleted.")
+        st.rerun()
 
 conn.close()
