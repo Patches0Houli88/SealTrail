@@ -14,70 +14,92 @@ if "db_path" not in st.session_state:
     st.warning("No database selected. Please select one from the main page.")
     st.stop()
 
-db_path = st.session_state.db_path
-conn = sqlite3.connect(db_path)
+# Role-based logic
+user_email = st.session_state.get("user_email", "unknown@example.com")
+user_role = "guest"
+
+if os.path.exists("roles.yaml"):
+    import yaml
+    with open("roles.yaml") as f:
+        roles = yaml.safe_load(f)
+    user_info = roles.get("users", {}).get(user_email, {})
+    user_role = user_info.get("role", "guest")
+
+conn = sqlite3.connect(st.session_state.db_path)
 
 # --- Load Data ---
-def safe_read_sql(query):
-    try:
-        return pd.read_sql(query, conn)
-    except Exception:
-        return pd.DataFrame()
+try:
+    equipment_df = pd.read_sql("SELECT * FROM equipment", conn)
+except:
+    equipment_df = pd.DataFrame()
 
-equipment_df = safe_read_sql("SELECT * FROM equipment")
-maintenance_df = safe_read_sql("SELECT * FROM maintenance_log")
-scans_df = safe_read_sql("SELECT * FROM scanned_items")
+try:
+    maintenance_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
+except:
+    maintenance_df = pd.DataFrame()
+
+try:
+    scans_df = pd.read_sql("SELECT * FROM scanned_items", conn)
+except:
+    scans_df = pd.DataFrame()
 
 conn.close()
 
 tab1, tab2, tab3 = st.tabs(["📦 Inventory", "🛠 Maintenance", "📷 Barcode Scans"])
 
-# --- Tab 1: Inventory Overview ---
+# --- Inventory Tab ---
 with tab1:
-    st.subheader("Inventory Data")
+    st.subheader("Inventory Overview")
     if not equipment_df.empty:
         st.dataframe(equipment_df)
 
+        # Pie Chart by Status (Only if available)
         if "status" in equipment_df.columns:
-            chart_data = equipment_df["status"].value_counts().reset_index()
-            chart_data.columns = ["status", "count"]
-
-            pie_chart = (
-                alt.Chart(chart_data)
+            status_chart = (
+                alt.Chart(equipment_df)
                 .mark_arc()
                 .encode(
-                    theta="count:Q",
-                    color="status:N",
-                    tooltip=["status", "count"]
+                    theta=alt.Theta(field="count", type="quantitative"),
+                    color=alt.Color(field="status", type="nominal"),
+                    tooltip=["status", "count"],
+                )
+                .transform_aggregate(
+                    count='count()',
+                    groupby=["status"]
                 )
             )
-            st.altair_chart(pie_chart, use_container_width=True)
+            st.altair_chart(status_chart, use_container_width=True)
         else:
-            st.info("No 'status' column found for pie chart.")
+            st.warning("No 'status' column found to create the pie chart.")
     else:
         st.info("No inventory data to display.")
 
-# --- Tab 2: Maintenance Logs ---
+# --- Maintenance Tab ---
 with tab2:
     st.subheader("Maintenance Logs")
     if not maintenance_df.empty:
-        st.dataframe(maintenance_df)
-
         if "date" in maintenance_df.columns:
             maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
+
             default_start = datetime.today() - timedelta(days=30)
             default_end = datetime.today()
 
-            date_range = st.date_input("Filter by date", (default_start, default_end))
-            if isinstance(date_range, tuple) and len(date_range) == 2:
-                start, end = date_range
+            start, end = st.date_input(
+                "Filter maintenance by date",
+                (default_start, default_end),
+                key="maintenance_date_range"
+            )
+
+            if start and end:
                 maintenance_df = maintenance_df[
                     (maintenance_df["date"] >= pd.to_datetime(start)) &
                     (maintenance_df["date"] <= pd.to_datetime(end))
                 ]
 
+        st.dataframe(maintenance_df)
+
         if "equipment_id" in maintenance_df.columns:
-            bar_chart = (
+            chart = (
                 alt.Chart(maintenance_df)
                 .mark_bar()
                 .encode(
@@ -86,25 +108,23 @@ with tab2:
                     tooltip=["equipment_id", "count()"]
                 )
             )
-            st.altair_chart(bar_chart, use_container_width=True)
-        else:
-            st.info("No 'equipment_id' column found for bar chart.")
+            st.altair_chart(chart, use_container_width=True)
     else:
         st.info("No maintenance logs available.")
 
-# --- Tab 3: Barcode Scans ---
+# --- Scans Tab ---
 with tab3:
-    st.subheader("Scan History")
+    st.subheader("Barcode Scan History")
     if not scans_df.empty:
         st.dataframe(scans_df)
 
         if "timestamp" in scans_df.columns:
-            scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
+            scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"])
             scans_df["date"] = scans_df["timestamp"].dt.date
-            chart_data = scans_df.groupby("date").size().reset_index(name="scan_count")
+            daily_counts = scans_df.groupby("date").size().reset_index(name="scan_count")
 
-            scan_chart = (
-                alt.Chart(chart_data)
+            chart = (
+                alt.Chart(daily_counts)
                 .mark_line(point=True)
                 .encode(
                     x="date:T",
@@ -112,8 +132,6 @@ with tab3:
                     tooltip=["date", "scan_count"]
                 )
             )
-            st.altair_chart(scan_chart, use_container_width=True)
-        else:
-            st.info("No 'timestamp' column found for time series chart.")
+            st.altair_chart(chart, use_container_width=True)
     else:
-        st.info("No barcode scan data available.")
+        st.info("No barcode scan data found.")
