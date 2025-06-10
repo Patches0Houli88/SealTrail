@@ -5,85 +5,129 @@ from datetime import datetime
 import os
 
 st.set_page_config(page_title="Barcode Scanner", layout="wide")
-st.title("📷 Barcode Scanner")
+st.title("📷 Scan Equipment (by Asset ID)")
 
-# --- Session Checks ---
+# --- Session & DB Setup ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
 
 if "db_path" not in st.session_state:
-    st.error("No database selected. Please return to the main page.")
+    st.error("No database selected.")
     st.stop()
 
 db_path = st.session_state.db_path
 
-# --- Table Selection ---
+# --- Setup Connection ---
 conn = sqlite3.connect(db_path)
+cursor = conn.cursor()
+
+# Ensure template table exists
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS templates (
+    make TEXT,
+    model TEXT,
+    field_data TEXT
+)
+""")
+conn.commit()
+
+# --- Target Table Selection ---
 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
 conn.close()
+st.sidebar.subheader("📂 Choose Target Table")
+target_table = st.sidebar.selectbox("Scan against table", tables)
 
-st.sidebar.subheader("📂 Target Table")
-target_table = st.sidebar.selectbox("Choose where to store scanned items", tables)
+# --- Barcode Input ---
+st.subheader("📥 Scan or Enter Asset ID")
+asset_id = st.text_input("Asset ID (scanned or typed)", placeholder="e.g. ABC123")
 
-# --- Load Table Schema ---
-conn = sqlite3.connect(db_path)
-try:
-    schema_df = pd.read_sql(f"SELECT * FROM {target_table} LIMIT 1", conn)
-    table_columns = schema_df.columns.tolist()
-except:
-    table_columns = []
+# --- Template Fallback ---
+def get_template(make, model):
+    with sqlite3.connect(db_path) as conn:
+        result = pd.read_sql(
+            "SELECT field_data FROM templates WHERE make=? AND model=?",
+            conn,
+            params=(make, model)
+        )
+        if not result.empty:
+            return eval(result.iloc[0]['field_data'])  # field_data is stored as stringified dict
+        return None
 
-conn.close()
+# --- Load or Create Record ---
+record = None
+table_columns = []
+template_data = {}
+if asset_id and target_table:
+    with sqlite3.connect(db_path) as conn:
+        df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
+        table_columns = df.columns.tolist()
 
-# --- Scan or Manual Entry ---
-st.subheader("📥 Scan or Enter Barcode")
-barcode = st.text_input("Scan Barcode or Enter Manually", placeholder="Scan or type barcode here")
+        if "Asset_ID" in df.columns:
+            match = df[df["Asset_ID"].astype(str) == asset_id]
+            if not match.empty:
+                record = match.iloc[0].to_dict()
+            else:
+                # Try loading template if available
+                if "make" in df.columns and "model" in df.columns:
+                    last = df[["make", "model"]].dropna().iloc[-1]
+                    template_data = get_template(last['make'], last['model'])
 
-# --- Optional Additional Fields ---
-additional_data = {}
-if table_columns:
-    for col in table_columns:
-        if col.lower() in ["id", "timestamp"]:
-            continue  # skip standard fields
-        additional_data[col] = st.text_input(f"{col}", key=f"field_{col}")
+# --- Display Form for Confirmation ---
+if asset_id:
+    st.markdown("### 🔧 Review & Confirm Record")
+    with st.form("confirm_entry"):
+        updated_data = {}
+        for col in table_columns:
+            if col.lower() in ["id", "rowid", "timestamp"]:
+                continue
+            prefill = record[col] if record else template_data.get(col, "")
+            updated_data[col] = st.text_input(col, value=str(prefill))
 
-# --- Submit Button ---
-if st.button("Save to Table"):
-    if not barcode:
-        st.warning("Please enter a barcode.")
-    else:
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {target_table} (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    barcode TEXT,
-                    timestamp TEXT,
-                    {', '.join([f'{col} TEXT' for col in additional_data.keys()])}
+        auto_maint = st.checkbox("📎 Log maintenance entry", value=not record)
+        submitted = st.form_submit_button("✅ Save Entry")
+
+    if submitted:
+        with sqlite3.connect(db_path) as conn:
+            if record:
+                update_stmt = ", ".join([f"{k}=?" for k in updated_data.keys()])
+                conn.execute(
+                    f"UPDATE {target_table} SET {update_stmt} WHERE Asset_ID = ?",
+                    list(updated_data.values()) + [asset_id]
                 )
-            """)
+                st.success("✅ Record updated.")
+            else:
+                keys = ", ".join(updated_data.keys())
+                placeholders = ", ".join("?" for _ in updated_data)
+                conn.execute(
+                    f"INSERT INTO {target_table} ({keys}) VALUES ({placeholders})",
+                    list(updated_data.values())
+                )
+                st.success("✅ New item added.")
 
-            timestamp = datetime.utcnow().isoformat()
-            columns = ["barcode", "timestamp"] + list(additional_data.keys())
-            values = [barcode, timestamp] + list(additional_data.values())
-            placeholders = ','.join("?" for _ in values)
-
-            conn.execute(f"INSERT INTO {target_table} ({','.join(columns)}) VALUES ({placeholders})", values)
+            if auto_maint:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS maintenance_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        equipment_id TEXT,
+                        description TEXT,
+                        date TEXT,
+                        technician TEXT,
+                        logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
+                    (asset_id, "Scanned and logged via barcode", str(datetime.today().date()), user_email)
+                )
             conn.commit()
-            st.success(f"✅ Saved to `{target_table}` at {timestamp}")
-        except Exception as e:
-            st.error(f"❌ Error saving scan: {e}")
-        finally:
-            conn.close()
 
-# --- View Scanned Items ---
-st.subheader(f"📋 Recent Entries in `{target_table}`")
+# --- Recent Scans Display ---
+st.markdown("### 🧾 Recent Scans")
 try:
     conn = sqlite3.connect(db_path)
-    recent_scans = pd.read_sql(f"SELECT * FROM {target_table} ORDER BY ROWID DESC LIMIT 20", conn)
-    st.dataframe(recent_scans)
-except:
-    st.warning("No scan data available yet.")
-finally:
+    df = pd.read_sql(f"SELECT * FROM {target_table} ORDER BY rowid DESC LIMIT 20", conn)
+    st.dataframe(df)
     conn.close()
+except:
+    st.warning("No data found yet.")
