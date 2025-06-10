@@ -9,6 +9,18 @@ if not st.user.is_logged_in:
     st.button("Log in with Google", on_click=st.login)
     st.stop()
 
+# --- Fallback Auth Check (for dev/local/Streamlit Community) ---
+try:
+    if not st.user.is_logged_in:
+        st.button("Log in with Google", on_click=st.login)
+        st.stop()
+    user_email = st.user.get("email", "unknown@example.com")
+    user_name = st.user.get("name", "Unknown")
+except Exception:
+    # Fallback in dev mode
+    user_email = "wagrato@gmail.com"
+    user_name = "Will"
+
 # --- User Info + Logout ---
 user_email = st.user.get("email", "unknown@example.com")
 user_name = st.user.get("name", "Unknown")
