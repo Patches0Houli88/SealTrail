@@ -14,7 +14,7 @@ db_path = st.session_state.get("db_path")
 active_table = st.session_state.get("active_table", "equipment")
 
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
-st.sidebar.markdown(f"📦 Active Table: `{active_table}`")
+st.sidebar.markdown(f"📦 Table: `{active_table}`")
 
 if not db_path or not os.path.exists(db_path):
     st.error("No active database found. Please return to the main page.")
@@ -26,7 +26,8 @@ try:
     df = pd.read_sql("SELECT * FROM maintenance_log", conn)
     if not df.empty:
         st.subheader("🧾 Maintenance History")
-        st.dataframe(df, use_container_width=True)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        st.dataframe(df)
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
     else:
@@ -41,9 +42,8 @@ item_options = []
 try:
     with sqlite3.connect(db_path) as conn:
         df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
-        # Try to identify ID and name columns dynamically
-        id_col = next((col for col in df_equipment.columns if col.lower() == "asset_id" or col.lower() == "equipment_id"), None)
-        name_col = next((col for col in df_equipment.columns if col.lower() == "name"), None)
+        id_col = next((c for c in df_equipment.columns if c.lower() in ["asset_id", "equipment_id"]), None)
+        name_col = next((c for c in df_equipment.columns if c.lower() == "name"), None)
 
         if id_col:
             if name_col:
@@ -51,7 +51,7 @@ try:
             else:
                 item_options = df_equipment[id_col].astype(str).tolist()
 except Exception as e:
-    st.warning(f"⚠️ Could not load data from `{active_table}`: {e}")
+    st.warning(f"⚠️ Could not load equipment from `{active_table}`: {e}")
 
 # --- Add Maintenance Record ---
 st.subheader("➕ Add Maintenance Record")
@@ -63,7 +63,7 @@ with st.form("maintenance_entry_form"):
         selected_equipment = st.selectbox("Choose Equipment", item_options)
         equipment_id = selected_equipment.split(" - ")[0].strip()
     else:
-        equipment_id = st.text_input("Enter Equipment ID Manually")
+        equipment_id = st.text_input("Enter Equipment ID Manually").strip()
 
     description = st.text_area("Work Description")
     date_performed = st.date_input("Date Performed", value=datetime.today())
@@ -84,8 +84,10 @@ if submit_log and equipment_id and description:
                 logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
-                     (equipment_id, description, str(date_performed), technician))
+        conn.execute(
+            "INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
+            (equipment_id, description, str(date_performed), technician)
+        )
         conn.commit()
         st.success("✅ Maintenance record added.")
     except Exception as e:
