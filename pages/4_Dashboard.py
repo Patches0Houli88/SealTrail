@@ -9,7 +9,6 @@ import smtplib
 from email.message import EmailMessage
 import yaml
 
-# --- Page Setup ---
 st.set_page_config(page_title="Custom Dashboard", layout="wide")
 st.title("📊 Equipment Dashboard")
 
@@ -50,6 +49,7 @@ try:
         CREATE TABLE IF NOT EXISTS scanned_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             Asset_ID TEXT,
+            Equipment_Type TEXT,
             timestamp TEXT,
             scanned_by TEXT
         )
@@ -58,7 +58,7 @@ except Exception as e:
     st.warning(f"Failed to ensure table scanned_items exists: {e}")
 conn.commit()
 
-# --- Load Tables Safely ---
+# --- Load Tables ---
 def load_table(name):
     try:
         return pd.read_sql_query(f"SELECT * FROM {name}", conn)
@@ -71,14 +71,19 @@ maintenance_df = load_table("maintenance")
 scans_df = load_table("scanned_items")
 conn.close()
 
-# --- Helper for Column Lookup (case-insensitive) ---
-def find_column(df, candidates):
-    for col in df.columns:
-        if col.lower() in [c.lower() for c in candidates]:
-            return col
-    return None
+# --- Normalize Casing for Compatibility ---
+equipment_df.columns = [col.lower() for col in equipment_df.columns]
+maintenance_df.columns = [col.lower() for col in maintenance_df.columns]
+scans_df.columns = [col.lower() for col in scans_df.columns]
 
-# --- PDF Export Function ---
+# Normalize key values
+for df in [equipment_df, maintenance_df, scans_df]:
+    if "equipment_id" in df.columns:
+        df["equipment_id"] = df["equipment_id"].astype(str).str.lower().str.strip()
+    if "equipment_type" in df.columns:
+        df["equipment_type"] = df["equipment_type"].astype(str).str.lower().str.strip()
+
+# --- PDF Export ---
 def export_to_pdf():
     pdf = FPDF()
     pdf.add_page()
@@ -86,24 +91,19 @@ def export_to_pdf():
     pdf.cell(200, 10, txt="Equipment Dashboard Report", ln=True, align="C")
     pdf.ln()
     pdf.cell(200, 10, txt=f"Total Items: {len(equipment_df)}", ln=True)
-    
-    type_col = find_column(equipment_df, ["type", "equipment_type"])
-    if type_col:
-        type_counts = equipment_df[type_col].dropna().astype(str).value_counts()
+    if "equipment_type" in equipment_df.columns:
+        type_counts = equipment_df["equipment_type"].dropna().value_counts()
         for t, count in type_counts.items():
-            pdf.cell(200, 10, txt=f"{t}: {count}", ln=True)
-
-    status_col = find_column(equipment_df, ["status"])
-    if status_col:
-        status_counts = equipment_df[status_col].dropna().astype(str).value_counts()
+            pdf.cell(200, 10, txt=f"{t.title()}: {count}", ln=True)
+    if "status" in equipment_df.columns:
+        status_counts = equipment_df["status"].dropna().astype(str).value_counts()
         for s, count in status_counts.items():
-            pdf.cell(200, 10, txt=f"{s}: {count}", ln=True)
-
+            pdf.cell(200, 10, txt=f"{s.title()}: {count}", ln=True)
     pdf.output("dashboard_report.pdf")
     with open("dashboard_report.pdf", "rb") as f:
         st.download_button("📄 Download PDF Report", f, file_name="dashboard_report.pdf")
 
-# --- Email PDF Function ---
+# --- Email PDF ---
 def email_pdf():
     if st.button("📧 Email PDF Report"):
         msg = EmailMessage()
@@ -136,7 +136,7 @@ else:
         "scans_chart": user_role == "admin"
     }
 
-# --- Sidebar Toggles ---
+# --- Sidebar Layout Options ---
 st.sidebar.subheader("🧩 Dashboard Sections")
 for key in st.session_state.visible_widgets:
     if user_role == "admin" or key not in ["maintenance_chart", "scans_chart"]:
@@ -144,11 +144,9 @@ for key in st.session_state.visible_widgets:
             key.replace("_", " ").title(), st.session_state.visible_widgets[key]
         )
 
-# Save layout
 with open(layout_file, "w") as f:
     yaml.dump(st.session_state.visible_widgets, f)
 
-# Sidebar controls
 st.sidebar.subheader("📊 Chart Settings")
 chart_type = st.sidebar.radio("Chart Type", ["Bar", "Pie"])
 
@@ -159,20 +157,19 @@ end_date = st.sidebar.date_input("End Date", datetime.today())
 if st.sidebar.checkbox("🔄 Auto Refresh"):
     st.rerun()
 
-# --- KPI Cards ---
+# --- KPIs ---
 if st.session_state.visible_widgets.get("kpis"):
     st.subheader("📌 Key Stats")
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Equipment", len(equipment_df))
 
-    type_col = find_column(equipment_df, ["type", "equipment_type"])
+    type_col = [col for col in equipment_df.columns if col in ["type", "equipment_type"]]
     if type_col:
-        equipment_df[type_col] = equipment_df[type_col].dropna().astype(str).str.strip()
-        type_counts = equipment_df[type_col].value_counts()
-        if not type_counts.empty:
-            col2.metric(f"Top Type: {type_counts.index[0]}", type_counts.iloc[0])
-            if len(type_counts) > 1:
-                col3.metric(f"2nd Type: {type_counts.index[1]}", type_counts.iloc[1])
+        counts = equipment_df[type_col[0]].value_counts()
+        if not counts.empty:
+            col2.metric(f"Top Type", counts.index[0].title())
+            if len(counts) > 1:
+                col3.metric(f"2nd Type", counts.index[1].title())
             else:
                 col3.write("Only one type found.")
         else:
@@ -183,19 +180,15 @@ if st.session_state.visible_widgets.get("kpis"):
         col3.write("—")
 
 # --- Status Chart ---
-status_col = find_column(equipment_df, ["status"])
-if st.session_state.visible_widgets.get("status_chart") and status_col:
+if st.session_state.visible_widgets.get("status_chart") and "status" in equipment_df.columns:
     st.subheader("Equipment Status")
-    status_data = equipment_df[status_col].dropna().astype(str).str.strip().str.title().value_counts().reset_index()
+    status_data = equipment_df["status"].dropna().astype(str).str.title().value_counts().reset_index()
     status_data.columns = ["status", "count"]
-    if chart_type == "Bar":
-        chart = alt.Chart(status_data).mark_bar().encode(
-            x="status:N", y="count:Q", color="status:N", tooltip=["status", "count"]
-        )
-    else:
-        chart = alt.Chart(status_data).mark_arc().encode(
-            theta="count:Q", color="status:N", tooltip=["status", "count"]
-        )
+    chart = alt.Chart(status_data).mark_bar().encode(
+        x="status:N", y="count:Q", color="status:N", tooltip=["status", "count"]
+    ) if chart_type == "Bar" else alt.Chart(status_data).mark_arc().encode(
+        theta="count:Q", color="status:N", tooltip=["status", "count"]
+    )
     st.altair_chart(chart, use_container_width=True)
 
 # --- Inventory Table ---
@@ -204,46 +197,45 @@ if st.session_state.visible_widgets.get("inventory_table"):
     st.dataframe(equipment_df, use_container_width=True)
 
 # --- Maintenance Chart ---
-maint_date_col = find_column(maintenance_df, ["maintenance_date"])
-if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty and maint_date_col:
+if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
     st.subheader("🛠 Maintenance Activity")
-    maintenance_df[maint_date_col] = pd.to_datetime(maintenance_df[maint_date_col], errors="coerce")
-    maintenance_df = maintenance_df.dropna(subset=[maint_date_col])
-    filtered = maintenance_df[
-        (maintenance_df[maint_date_col] >= pd.to_datetime(start_date)) &
-        (maintenance_df[maint_date_col] <= pd.to_datetime(end_date))
-    ]
-    if not filtered.empty:
-        chart = alt.Chart(filtered).mark_bar().encode(
-            x=f"{maint_date_col}:T", y="count():Q", tooltip=[maint_date_col]
-        ).transform_aggregate(
-            count="count()", groupby=[maint_date_col]
-        )
-        st.altair_chart(chart, use_container_width=True)
+    if "maintenance_date" in maintenance_df.columns:
+        maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
+        filtered = maintenance_df.dropna(subset=["maintenance_date"])
+        filtered = filtered[(filtered["maintenance_date"] >= pd.to_datetime(start_date)) & (filtered["maintenance_date"] <= pd.to_datetime(end_date))]
+        if not filtered.empty:
+            chart = alt.Chart(filtered).mark_bar().encode(
+                x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
+            ).transform_aggregate(
+                count="count()", groupby=["maintenance_date"]
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No maintenance logs in range.")
     else:
-        st.info("No maintenance logs found for selected range.")
+        st.warning("No 'maintenance_date' column.")
 
 # --- Scans Chart ---
-timestamp_col = find_column(scans_df, ["timestamp"])
-if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty and timestamp_col:
+if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
     st.subheader("📷 Barcode Scans Over Time")
-    scans_df[timestamp_col] = pd.to_datetime(scans_df[timestamp_col], errors="coerce")
-    scans_df = scans_df.dropna(subset=[timestamp_col])
-    scans_df["date"] = scans_df[timestamp_col].dt.date
-    filtered = scans_df[
-        (scans_df["date"] >= start_date) & (scans_df["date"] <= end_date)
-    ]
-    if not filtered.empty:
-        scan_data = filtered.groupby("date").size().reset_index(name="scan_count")
-        chart = alt.Chart(scan_data).mark_line(point=True).encode(
-            x="date:T", y="scan_count:Q", tooltip=["date", "scan_count"]
-        )
-        st.altair_chart(chart, use_container_width=True)
+    if "timestamp" in scans_df.columns:
+        scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
+        filtered = scans_df.dropna(subset=["timestamp"])
+        filtered["date"] = filtered["timestamp"].dt.date
+        filtered = filtered[(filtered["date"] >= start_date) & (filtered["date"] <= end_date)]
+        if not filtered.empty:
+            scan_data = filtered.groupby("date").size().reset_index(name="scan_count")
+            chart = alt.Chart(scan_data).mark_line(point=True).encode(
+                x="date:T", y="scan_count:Q", tooltip=["date", "scan_count"]
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No scan activity in date range.")
     else:
-        st.info("No scans found for selected range.")
+        st.warning("No 'timestamp' column found.")
 
-# --- Export & Email Report ---
+# --- Export/Email ---
 st.markdown("---")
 export_to_pdf()
 email_pdf()
-st.caption("Customize dashboard layout, filter by date, and export or email your results.")
+st.caption("Customize layout, filter by date, export or email results.")
