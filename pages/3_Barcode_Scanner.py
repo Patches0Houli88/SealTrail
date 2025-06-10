@@ -13,14 +13,32 @@ st.title("📷 Scan & Track Equipment")
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 db_path = st.session_state.get("db_path")
-active_table = st.session_state.get("active_table", "equipment")
-
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
-st.sidebar.markdown(f"📦 Active Table: `{active_table}`")
 
 if not db_path or not os.path.exists(db_path):
     st.error("No database loaded. Please return to the main page.")
     st.stop()
+
+# --- Table Selection ---
+conn = sqlite3.connect(db_path)
+tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
+conn.close()
+
+st.sidebar.subheader("📂 Target Table")
+target_table = st.sidebar.selectbox("Scan or add entries to this table", tables)
+
+# --- Ensure scanned_items table exists ---
+conn = sqlite3.connect(db_path)
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS scanned_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        equipment_id TEXT,
+        timestamp TEXT,
+        scanned_by TEXT
+    )
+""")
+conn.commit()
+conn.close()
 
 # --- Scanner UI ---
 st.markdown("### 🔍 Scanner Status")
@@ -29,25 +47,26 @@ st.info("📸 Scanner is **active**." if camera_active else "⛔ Scanner is **in
 
 # --- Asset ID Input ---
 st.markdown("### 🏷️ Scan or Enter Equipment ID")
-equipment_id = st.text_input("Equipment ID (barcode or manual entry)", placeholder="e.g., EQP-001")
+equipment_id = st.text_input("Equipment ID (barcode or manual entry)", placeholder="e.g., EQP-001").strip()
 
 # --- Load Record if Exists ---
 record = None
 table_columns = []
-id_col = None
-
-if equipment_id and active_table:
+matching_col = None
+if equipment_id and target_table:
+    conn = sqlite3.connect(db_path)
     try:
-        with sqlite3.connect(db_path) as conn:
-            df = pd.read_sql(f"SELECT * FROM {active_table}", conn)
-            table_columns = df.columns.tolist()
-            id_col = next((col for col in df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
-            if id_col:
-                record_df = df[df[id_col].astype(str).str.lower() == equipment_id.lower()]
-                if not record_df.empty:
-                    record = record_df.iloc[0].to_dict()
+        df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
+        table_columns = df.columns.tolist()
+        matching_col = next((col for col in df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+        if matching_col:
+            record_df = df[df[matching_col].astype(str).str.lower() == equipment_id.lower()]
+            if not record_df.empty:
+                record = record_df.iloc[0].to_dict()
     except Exception as e:
         st.error(f"Error loading table: {e}")
+    finally:
+        conn.close()
 
 # --- QR Code Preview ---
 if equipment_id:
@@ -86,46 +105,63 @@ if equipment_id:
 
         submit = st.form_submit_button("✅ Save Entry")
 
-    if submit and id_col:
+    if submit:
+        conn = sqlite3.connect(db_path)
         try:
-            with sqlite3.connect(db_path) as conn:
-                if record:
-                    clause = ", ".join([f"{k}=?" for k in updated])
-                    conn.execute(f"UPDATE {active_table} SET {clause} WHERE {id_col} = ?", list(updated.values()) + [equipment_id])
-                    st.success("Record updated.")
-                else:
-                    cols = ", ".join(updated.keys())
-                    placeholders = ", ".join(["?" for _ in updated])
-                    conn.execute(f"INSERT INTO {active_table} ({cols}) VALUES ({placeholders})", list(updated.values()))
-                    st.success("New record added.")
-                conn.commit()
+            if record and matching_col:
+                clause = ", ".join([f"{k}=?" for k in updated])
+                conn.execute(
+                    f"UPDATE {target_table} SET {clause} WHERE {matching_col} = ?",
+                    list(updated.values()) + [equipment_id]
+                )
+                st.success("Record updated.")
+            else:
+                cols = ", ".join(updated.keys())
+                placeholders = ", ".join(["?" for _ in updated])
+                conn.execute(
+                    f"INSERT INTO {target_table} ({cols}) VALUES ({placeholders})",
+                    list(updated.values())
+                )
+                st.success("New record added.")
+
+            # Log scan
+            conn.execute("INSERT INTO scanned_items (equipment_id, timestamp, scanned_by) VALUES (?, ?, ?)", 
+                         (equipment_id, str(datetime.now()), user_email))
+            conn.commit()
+            st.success("Scan recorded.")
+
         except Exception as e:
             st.error(f"Failed to save: {e}")
+        finally:
+            conn.close()
 
         # --- Optional Auto-Attach Maintenance Log ---
         if st.checkbox("🛠 Attach Maintenance Log"):
             try:
-                with sqlite3.connect(db_path) as conn:
-                    conn.execute("""CREATE TABLE IF NOT EXISTS maintenance_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        equipment_id TEXT,
-                        description TEXT,
-                        date TEXT,
-                        technician TEXT,
-                        logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )""")
-                    conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)", 
-                        (equipment_id, "Scanned and added via batch", str(datetime.today().date()), user_email))
-                    conn.commit()
-                    st.success("Maintenance log entry added.")
+                conn = sqlite3.connect(db_path)
+                conn.execute("""CREATE TABLE IF NOT EXISTS maintenance_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    equipment_id TEXT,
+                    description TEXT,
+                    date TEXT,
+                    technician TEXT,
+                    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )""")
+                conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)", 
+                    (equipment_id, "Scanned and added via barcode page", str(datetime.today().date()), user_email))
+                conn.commit()
+                st.success("Maintenance log entry added.")
             except Exception as e:
                 st.error(f"Failed to log maintenance: {e}")
+            finally:
+                conn.close()
 
 # --- Recent Entries Preview ---
-st.markdown("### 📋 Recent Records")
+st.markdown("### 📋 Recent Scans")
 try:
-    with sqlite3.connect(db_path) as conn:
-        df_preview = pd.read_sql(f"SELECT * FROM {active_table} ORDER BY rowid DESC LIMIT 25", conn)
-        st.dataframe(df_preview, use_container_width=True)
+    conn = sqlite3.connect(db_path)
+    scan_df = pd.read_sql("SELECT * FROM scanned_items ORDER BY timestamp DESC LIMIT 25", conn)
+    st.dataframe(scan_df, use_container_width=True)
+    conn.close()
 except Exception as e:
-    st.warning(f"Unable to preview table: {e}")
+    st.warning(f"Unable to preview scans: {e}")
