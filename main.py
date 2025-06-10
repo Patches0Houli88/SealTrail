@@ -4,9 +4,13 @@ import pandas as pd
 import sqlite3
 import yaml
 
-# --- Native Login ---
-if not st.user.is_logged_in:
-    st.button("Log in with Google", on_click=st.login)
+# --- Native Login Guard ---
+try:
+    if not st.user.is_logged_in:
+        st.button("Log in with Google", on_click=st.login)
+        st.stop()
+except Exception:
+    st.error("Session not initialized. Please refresh or log in again.")
     st.stop()
 
 # --- User Info + Logout ---
@@ -16,20 +20,19 @@ st.sidebar.markdown(f"Logged in as: {user_name}")
 st.sidebar.markdown(f"Email: {user_email}")
 if st.sidebar.button("Logout"):
     st.logout()
+
 # --- User Directory ---
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
-# --- Load/Create Roles ---
+
+# --- Roles Setup ---
 roles_config = {}
 if os.path.exists("roles.yaml"):
     with open("roles.yaml") as f:
         roles_config = yaml.safe_load(f) or {}
-else:
-    roles_config = {}
-
 roles_config.setdefault("users", {})
 
-# Auto-add new user
+# --- Register New User ---
 if user_email not in roles_config["users"]:
     roles_config["users"][user_email] = {
         "role": "user",
@@ -43,7 +46,7 @@ allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
 st.session_state["user_email"] = user_email
 st.session_state["user_role"] = user_role
 
-# --- Sidebar: Role and DB Management ---
+# --- Sidebar: DB Management ---
 st.sidebar.write(f"Role: {user_role.capitalize()}")
 db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
 if allowed_dbs != ["all"]:
@@ -73,26 +76,22 @@ if db_files:
     st.session_state.selected_db = selected_db
 else:
     st.sidebar.warning("No databases found. Create one above.")
-
-# --- Delete DB ---
-if db_files:
-    deletable = db_files if user_role == "admin" else [db for db in db_files if db in allowed_dbs]
-    with st.sidebar.expander("Delete Database"):
-        db_to_delete = st.selectbox("Delete which?", deletable)
-        if st.button("Delete DB"):
-            os.remove(os.path.join(user_dir, db_to_delete))
-            if db_to_delete in roles_config["users"][user_email]["allowed_dbs"]:
-                roles_config["users"][user_email]["allowed_dbs"].remove(db_to_delete)
-                with open("roles.yaml", "w") as f:
-                    yaml.safe_dump(roles_config, f)
-            st.success(f"{db_to_delete} deleted.")
-            st.rerun()
-
-# --- Main Section ---
-if "selected_db" not in st.session_state:
-    st.warning("No database selected.")
     st.stop()
 
+# --- Delete DB ---
+with st.sidebar.expander("Delete Database"):
+    deletable = db_files if user_role == "admin" else [db for db in db_files if db in allowed_dbs]
+    db_to_delete = st.selectbox("Delete which?", deletable)
+    if st.button("Delete DB"):
+        os.remove(os.path.join(user_dir, db_to_delete))
+        if db_to_delete in roles_config["users"][user_email]["allowed_dbs"]:
+            roles_config["users"][user_email]["allowed_dbs"].remove(db_to_delete)
+            with open("roles.yaml", "w") as f:
+                yaml.safe_dump(roles_config, f)
+        st.success(f"{db_to_delete} deleted.")
+        st.rerun()
+
+# --- DB Path Finalization ---
 db_path = os.path.join(user_dir, st.session_state.selected_db)
 st.session_state.db_path = db_path
 st.title("Equipment & Inventory Tracking System")
@@ -103,7 +102,6 @@ try:
     conn = sqlite3.connect(db_path)
     tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
     conn.close()
-
     if tables:
         active_table = st.selectbox("Select active working table", tables, key="table_selector")
         st.session_state.active_table = active_table
@@ -115,7 +113,7 @@ except Exception as e:
     st.warning(f"Error fetching tables: {e}")
     st.session_state.active_table = None
 
-# --- Upload Inventory ---
+# --- Upload Inventory File ---
 st.subheader("Upload Inventory File")
 uploaded_file = st.file_uploader("Upload CSV, Excel, JSON or TSV", type=["csv", "xlsx", "xls", "tsv", "json"])
 if uploaded_file:
@@ -133,16 +131,14 @@ if uploaded_file:
             st.error("Unsupported file type.")
             st.stop()
 
-        # Check for table structure mismatch
+        # Column mapping if table already exists
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         try:
             existing_cols = pd.read_sql("SELECT * FROM equipment LIMIT 1", conn).columns.tolist()
             st.warning("Column mismatch detected. Please map your columns.")
-            col_mapping = {}
-            for col in existing_cols:
-                col_mapping[col] = st.selectbox(f"Map '{col}' to:", df.columns, key=col)
-            df = df.rename(columns=col_mapping)[existing_cols]  # reorder to match
+            col_mapping = {col: st.selectbox(f"Map '{col}' to:", df.columns, key=col) for col in existing_cols}
+            df = df.rename(columns=col_mapping)[existing_cols]
         except:
             pass
 
@@ -153,7 +149,6 @@ if uploaded_file:
             conn.commit()
             st.success("Saved to DB.")
         conn.close()
-
     except Exception as e:
         st.error(f"Error processing file: {e}")
 
