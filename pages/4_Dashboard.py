@@ -11,7 +11,7 @@ import yaml
 
 # --- Page Setup ---
 st.set_page_config(page_title="Custom Dashboard", layout="wide")
-st.title("Equipment Dashboard")
+st.title("📊 Equipment Dashboard")
 
 # --- Get User Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
@@ -24,9 +24,15 @@ if not db_path or not os.path.exists(db_path):
     st.error("No valid database selected. Please return to the main page.")
     st.stop()
 
-# --- Ensure Required Tables Exist ---
-required_tables = {
-    "maintenance": """
+# --- Get Active Table Name ---
+active_table = st.session_state.get("active_table", "equipment")
+st.sidebar.info(f"📦 Active Table: `{active_table}`")
+
+# --- Ensure Tables Exist ---
+conn = sqlite3.connect(db_path)
+cursor = conn.cursor()
+try:
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS maintenance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             equipment_id TEXT,
@@ -35,51 +41,35 @@ required_tables = {
             technician TEXT,
             logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """,
-    "scanned_items": """
+    """)
+except Exception as e:
+    st.warning(f"Failed to ensure table maintenance exists: {e}")
+
+try:
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS scanned_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             Asset_ID TEXT,
-            scanned_by TEXT,
-            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            timestamp TEXT,
+            scanned_by TEXT
         )
-    """
-}
-
-for table, ddl in required_tables.items():
-    try:
-        conn.execute(ddl)
-    except Exception as e:
-        st.warning(f"Failed to ensure table `{table}` exists: {e}")
-        
-# --- Get Active Table Name ---
-active_table = st.session_state.get("active_table")
-if not active_table:
-    st.error("No active table selected. Please go to the main page and select a table.")
-    st.stop()
-
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
-
-conn = sqlite3.connect(db_path)
+    """)
+except Exception as e:
+    st.warning(f"Failed to ensure table scanned_items exists: {e}")
+conn.commit()
 
 # --- Load Tables Safely ---
 def load_table(name):
     try:
         return pd.read_sql_query(f"SELECT * FROM {name}", conn)
     except Exception as e:
-        st.warning(f"Could not load table `{name}`: {e}")
+        st.warning(f"Could not load table {name}: {e}")
         return pd.DataFrame()
+
 equipment_df = load_table(active_table)
 maintenance_df = load_table("maintenance")
 scans_df = load_table("scanned_items")
-
 conn.close()
-
-st.subheader("📋 Active Table Preview")
-if equipment_df.empty:
-    st.info(f"No data found in `{active_table}`.")
-else:
-    st.dataframe(equipment_df.head())
 
 # --- PDF Export Function ---
 def export_to_pdf():
@@ -163,16 +153,20 @@ if st.session_state.visible_widgets.get("kpis"):
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Equipment", len(equipment_df))
 
-    if "type" in equipment_df.columns and not equipment_df["type"].dropna().empty:
+    if "type" in equipment_df.columns:
         equipment_df["type"] = equipment_df["type"].dropna().astype(str).str.strip()
         type_counts = equipment_df["type"].value_counts()
-        col2.metric(f"Top Type: {type_counts.index[0]}", type_counts.iloc[0])
-        if len(type_counts) > 1:
-            col3.metric(f"2nd Type: {type_counts.index[1]}", type_counts.iloc[1])
+        if not type_counts.empty:
+            col2.metric(f"Top Type: {type_counts.index[0]}", type_counts.iloc[0])
+            if len(type_counts) > 1:
+                col3.metric(f"2nd Type: {type_counts.index[1]}", type_counts.iloc[1])
+            else:
+                col3.write("Only one type found.")
         else:
-            col3.write("Only one type found.")
+            col2.write("No type data.")
+            col3.write("—")
     else:
-        col2.write("No 'type' data.")
+        col2.write("No 'type' column.")
         col3.write("—")
 
 # --- Status Chart ---
@@ -198,28 +192,24 @@ if st.session_state.visible_widgets.get("inventory_table"):
 # --- Maintenance Chart ---
 if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
     st.subheader("🛠 Maintenance Activity")
-    if "date" in maintenance_df.columns:
-        maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
-    elif "maintenance_date" in maintenance_df.columns:
+    if "maintenance_date" in maintenance_df.columns:
         maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
+        maintenance_df = maintenance_df.dropna(subset=["maintenance_date"])
+        filtered = maintenance_df[
+            (maintenance_df["maintenance_date"] >= pd.to_datetime(start_date)) &
+            (maintenance_df["maintenance_date"] <= pd.to_datetime(end_date))
+        ]
+        if not filtered.empty:
+            chart = alt.Chart(filtered).mark_bar().encode(
+                x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
+            ).transform_aggregate(
+                count="count()", groupby=["maintenance_date"]
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No maintenance logs found for selected range.")
     else:
-        st.warning("No valid date column in maintenance table.")
-        maintenance_df["maintenance_date"] = pd.NaT
-
-    maintenance_df = maintenance_df.dropna(subset=["maintenance_date"])
-    filtered = maintenance_df[
-        (maintenance_df["maintenance_date"] >= pd.to_datetime(start_date)) &
-        (maintenance_df["maintenance_date"] <= pd.to_datetime(end_date))
-    ]
-    if not filtered.empty:
-        chart = alt.Chart(filtered).mark_bar().encode(
-            x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
-        ).transform_aggregate(
-            count="count()", groupby=["maintenance_date"]
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No maintenance logs found for selected range.")
+        st.warning("No 'maintenance_date' column found.")
 
 # --- Scans Chart ---
 if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
@@ -240,7 +230,7 @@ if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
         else:
             st.info("No scans found for selected range.")
     else:
-        st.warning("No 'timestamp' column found in scans table.")
+        st.warning("No 'timestamp' column found.")
 
 # --- Export & Email Report ---
 st.markdown("---")
