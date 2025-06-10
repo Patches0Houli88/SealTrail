@@ -125,20 +125,16 @@ if st.session_state.visible_widgets.get("kpis"):
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Equipment", len(equipment_df))
 
-    if "type" in equipment_df.columns:
+    if "type" in equipment_df.columns and not equipment_df["type"].dropna().empty:
         equipment_df["type"] = equipment_df["type"].dropna().astype(str).str.strip()
         type_counts = equipment_df["type"].value_counts()
-        if not type_counts.empty:
-            col2.metric(f"Top Type: {type_counts.index[0]}", type_counts.iloc[0])
-            if len(type_counts) > 1:
-                col3.metric(f"2nd Type: {type_counts.index[1]}", type_counts.iloc[1])
-            else:
-                col3.write("Only one type found.")
+        col2.metric(f"Top Type: {type_counts.index[0]}", type_counts.iloc[0])
+        if len(type_counts) > 1:
+            col3.metric(f"2nd Type: {type_counts.index[1]}", type_counts.iloc[1])
         else:
-            col2.write("No type data.")
-            col3.write("—")
+            col3.write("Only one type found.")
     else:
-        col2.write("No 'type' column.")
+        col2.write("No 'type' data.")
         col3.write("—")
 
 # --- Status Chart ---
@@ -164,24 +160,28 @@ if st.session_state.visible_widgets.get("inventory_table"):
 # --- Maintenance Chart ---
 if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
     st.subheader("🛠 Maintenance Activity")
-    if "maintenance_date" in maintenance_df.columns:
+    if "date" in maintenance_df.columns:
+        maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
+    elif "maintenance_date" in maintenance_df.columns:
         maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
-        maintenance_df = maintenance_df.dropna(subset=["maintenance_date"])
-        filtered = maintenance_df[
-            (maintenance_df["maintenance_date"] >= pd.to_datetime(start_date)) &
-            (maintenance_df["maintenance_date"] <= pd.to_datetime(end_date))
-        ]
-        if not filtered.empty:
-            chart = alt.Chart(filtered).mark_bar().encode(
-                x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
-            ).transform_aggregate(
-                count="count()", groupby=["maintenance_date"]
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No maintenance logs found for selected range.")
     else:
-        st.warning("No 'maintenance_date' column found.")
+        st.warning("No valid date column in maintenance table.")
+        maintenance_df["maintenance_date"] = pd.NaT
+
+    maintenance_df = maintenance_df.dropna(subset=["maintenance_date"])
+    filtered = maintenance_df[
+        (maintenance_df["maintenance_date"] >= pd.to_datetime(start_date)) &
+        (maintenance_df["maintenance_date"] <= pd.to_datetime(end_date))
+    ]
+    if not filtered.empty:
+        chart = alt.Chart(filtered).mark_bar().encode(
+            x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
+        ).transform_aggregate(
+            count="count()", groupby=["maintenance_date"]
+        )
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("No maintenance logs found for selected range.")
 
 # --- Scans Chart ---
 if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
@@ -202,7 +202,7 @@ if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
         else:
             st.info("No scans found for selected range.")
     else:
-        st.warning("No 'timestamp' column found.")
+        st.warning("No 'timestamp' column found in scans table.")
 
 # --- Export & Email Report ---
 st.markdown("---")
