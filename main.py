@@ -1,5 +1,3 @@
 import streamlit as st
-
-st.title("Debug App")
-
-st.write("Session state:", st.session_state)
+st.title("Debug Boot Test")
+st.write("✅ App booted successfully.")
