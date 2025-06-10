@@ -40,10 +40,21 @@ finally:
     conn.close()
 
 # --- Add New Record ---
-st.subheader("➕ Add Maintenance Record")
+with st.form("add_maintenance"):
+    st.markdown("### 🛠 Add Maintenance Record")
 
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
+    input_mode = st.radio("Select equipment input method:", ["Dropdown", "Manual Entry"], horizontal=True)
+
+    if item_options and input_mode == "Dropdown":
+        selected_equipment = st.selectbox("Choose Equipment", item_options)
+        equipment_id = selected_equipment.split(" - ")[0].strip()
+    else:
+        equipment_id = st.text_input("Enter Asset_ID manually")
+
+    description = st.text_area("Description of Work")
+    date_performed = st.date_input("Date Performed", value=datetime.today())
+    technician = st.text_input("Technician Name")
+    submit_log = st.form_submit_button("Save Record")
 
 # Load equipment options using Asset_ID or fallback
 try:
