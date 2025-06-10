@@ -10,13 +10,15 @@ st.title("🛠 Maintenance Log")
 # --- Session & Access Checks ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
+db_path = st.session_state.get("db_path")
+active_table = st.session_state.get("active_table", "equipment")
+
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.markdown(f"📦 Active Table: `{active_table}`")
 
-if "db_path" not in st.session_state:
-    st.error("No active database found. Please select or upload one in the main page.")
+if not db_path or not os.path.exists(db_path):
+    st.error("No active database found. Please return to the main page.")
     st.stop()
-
-db_path = st.session_state.db_path
 
 # --- Load and Display Maintenance Log ---
 conn = sqlite3.connect(db_path)
@@ -24,7 +26,7 @@ try:
     df = pd.read_sql("SELECT * FROM maintenance_log", conn)
     if not df.empty:
         st.subheader("🧾 Maintenance History")
-        st.dataframe(df)
+        st.dataframe(df, use_container_width=True)
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
     else:
@@ -38,14 +40,18 @@ finally:
 item_options = []
 try:
     with sqlite3.connect(db_path) as conn:
-        df_equipment = pd.read_sql("SELECT * FROM equipment", conn)
-        if "Asset_ID" in df_equipment.columns:
-            if "name" in df_equipment.columns:
-                item_options = (df_equipment["Asset_ID"].astype(str) + " - " + df_equipment["name"].astype(str)).tolist()
+        df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
+        # Try to identify ID and name columns dynamically
+        id_col = next((col for col in df_equipment.columns if col.lower() == "asset_id" or col.lower() == "equipment_id"), None)
+        name_col = next((col for col in df_equipment.columns if col.lower() == "name"), None)
+
+        if id_col:
+            if name_col:
+                item_options = (df_equipment[id_col].astype(str) + " - " + df_equipment[name_col].astype(str)).tolist()
             else:
-                item_options = df_equipment["Asset_ID"].astype(str).tolist()
+                item_options = df_equipment[id_col].astype(str).tolist()
 except Exception as e:
-    st.warning(f"⚠️ Could not load equipment: {e}")
+    st.warning(f"⚠️ Could not load data from `{active_table}`: {e}")
 
 # --- Add Maintenance Record ---
 st.subheader("➕ Add Maintenance Record")
@@ -57,7 +63,7 @@ with st.form("maintenance_entry_form"):
         selected_equipment = st.selectbox("Choose Equipment", item_options)
         equipment_id = selected_equipment.split(" - ")[0].strip()
     else:
-        equipment_id = st.text_input("Enter Asset_ID Manually")
+        equipment_id = st.text_input("Enter Equipment ID Manually")
 
     description = st.text_area("Work Description")
     date_performed = st.date_input("Date Performed", value=datetime.today())
