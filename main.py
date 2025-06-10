@@ -4,37 +4,34 @@ import pandas as pd
 import sqlite3
 import yaml
 
-# --- Try-Except Around Auth for Stability ---
-try:
-    if not st.user.is_logged_in:
-        st.button("Log in with Google", on_click=st.login)
-        st.stop()
-    user_email = st.user.get("email", "unknown@example.com")
-    user_name = st.user.get("name", "Unknown")
-except Exception:
-    st.warning("User login unavailable. Falling back to default guest mode.")
-    user_email = "guest@example.com"
-    user_name = "Guest"
+# --- Native Login ---
+if not st.user.is_logged_in:
+    st.button("Log in with Google", on_click=st.login)
+    st.stop()
 
-# --- Sidebar Info ---
+# --- User Info + Logout ---
+user_email = st.user.get("email", "unknown@example.com")
+user_name = st.user.get("name", "Unknown")
 st.sidebar.markdown(f"Logged in as: {user_name}")
 st.sidebar.markdown(f"Email: {user_email}")
 if st.sidebar.button("Logout"):
-    try:
-        st.logout()
-    except Exception:
-        st.warning("Logout not supported in this environment.")
+    st.logout()
 
 # --- User Directory ---
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
 
-# --- Load/Create Roles ---
+# --- Load/Create Roles Config ---
 roles_config = {}
 if os.path.exists("roles.yaml"):
     with open("roles.yaml") as f:
         roles_config = yaml.safe_load(f) or {}
+else:
+    roles_config = {}
+
 roles_config.setdefault("users", {})
+
+# Auto-add user if not present
 if user_email not in roles_config["users"]:
     roles_config["users"][user_email] = {
         "role": "user",
@@ -48,14 +45,14 @@ allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
 st.session_state["user_email"] = user_email
 st.session_state["user_role"] = user_role
 
-# --- Sidebar: DB Controls ---
+# --- Sidebar Role + DB Management ---
 st.sidebar.write(f"Role: {user_role.capitalize()}")
-db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
+db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
 if allowed_dbs != ["all"]:
     db_files = [db for db in db_files if db in allowed_dbs]
 
 # --- Create DB ---
-new_db_name = st.sidebar.text_input("Create new database", placeholder="example: inventory.db")
+new_db_name = st.sidebar.text_input("Create new database", placeholder="example: laptops.db")
 if st.sidebar.button("Create DB") and new_db_name:
     if not new_db_name.endswith(".db"):
         new_db_name += ".db"
@@ -108,6 +105,7 @@ try:
     conn = sqlite3.connect(db_path)
     tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
     conn.close()
+
     if tables:
         active_table = st.selectbox("Select active working table", tables, key="table_selector")
         st.session_state.active_table = active_table
@@ -137,7 +135,9 @@ if uploaded_file:
             st.error("Unsupported file type.")
             st.stop()
 
+        # --- Column Mapping ---
         conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
         try:
             existing_cols = pd.read_sql("SELECT * FROM equipment LIMIT 1", conn).columns.tolist()
             st.warning("Column mismatch detected. Please map your columns.")
@@ -155,10 +155,11 @@ if uploaded_file:
             conn.commit()
             st.success("Saved to DB.")
         conn.close()
+
     except Exception as e:
         st.error(f"Error processing file: {e}")
 
-# --- Show Inventory ---
+# --- Show Current Inventory ---
 try:
     with sqlite3.connect(db_path) as conn:
         existing_df = pd.read_sql("SELECT * FROM equipment", conn)
@@ -175,10 +176,12 @@ with sqlite3.connect(db_path) as conn:
         st.metric("Inventory Items", pd.read_sql("SELECT COUNT(*) as count FROM equipment", conn)["count"][0])
     except:
         st.metric("Inventory Items", 0)
+
     try:
         st.metric("Maintenance Logs", pd.read_sql("SELECT COUNT(*) as count FROM maintenance", conn)["count"][0])
     except:
         st.metric("Maintenance Logs", 0)
+
     try:
         st.metric("Barcode Scans", pd.read_sql("SELECT COUNT(*) as count FROM scanned_items", conn)["count"][0])
     except:
