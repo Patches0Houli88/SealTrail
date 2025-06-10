@@ -9,71 +9,64 @@ import smtplib
 from email.message import EmailMessage
 import yaml
 
-# --- Page Setup ---
 st.set_page_config(page_title="Custom Dashboard", layout="wide")
 st.title("📊 Equipment Dashboard")
 
-# --- Get User Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 st.sidebar.markdown(f"Role: `{user_role}`  \n📧 **Email:** {user_email}")
 
-# --- Validate DB Path ---
 db_path = st.session_state.get("db_path", None)
 if not db_path or not os.path.exists(db_path):
     st.error("No valid database selected. Please return to the main page.")
     st.stop()
 
-# --- Get Active Table Name ---
 active_table = st.session_state.get("active_table", "equipment")
 st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
-# --- Ensure Dynamic Tables Exist ---
-def ensure_dynamic_table(base_name, schema):
-    try:
-        table_name = f"{base_name}_{active_table}"
-        cursor.execute(schema.format(table_name=table_name))
-        conn.commit()
-    except Exception as e:
-        st.warning(f"Failed to ensure table {base_name}: {e}")
+# Ensure tables exist
+try:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS maintenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            equipment_id TEXT,
+            description TEXT,
+            maintenance_date TEXT,
+            technician TEXT,
+            logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scanned_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Asset_ID TEXT,
+            timestamp TEXT,
+            scanned_by TEXT
+        )
+    """)
+    conn.commit()
+except Exception as e:
+    st.warning(f"⚠️ Failed to ensure tables: {e}")
 
-ensure_dynamic_table("maintenance", """
-    CREATE TABLE IF NOT EXISTS {table_name} (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        equipment_id TEXT,
-        description TEXT,
-        maintenance_date TEXT,
-        technician TEXT,
-        logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-
-ensure_dynamic_table("scanned_items", """
-    CREATE TABLE IF NOT EXISTS {table_name} (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        Asset_ID TEXT,
-        timestamp TEXT,
-        scanned_by TEXT
-    )
-""")
-
-# --- Load Tables Safely ---
+# Load tables safely with lowercase column normalization
 def load_table(name):
     try:
-        return pd.read_sql_query(f"SELECT * FROM {name}", conn)
+        df = pd.read_sql_query(f"SELECT * FROM {name}", conn)
+        df.columns = df.columns.str.lower()
+        return df
     except Exception as e:
-        st.warning(f"Could not load table {name}: {e}")
+        st.warning(f"⚠️ Could not load table `{name}`: {e}")
         return pd.DataFrame()
 
 equipment_df = load_table(active_table)
-maintenance_df = load_table(f"maintenance_{active_table}")
-scans_df = load_table(f"scanned_items_{active_table}")
+maintenance_df = load_table("maintenance")
+scans_df = load_table("scanned_items")
 conn.close()
 
-# --- PDF Export Function ---
+# PDF Export
 def export_to_pdf():
     pdf = FPDF()
     pdf.add_page()
@@ -81,20 +74,20 @@ def export_to_pdf():
     pdf.cell(200, 10, txt="Equipment Dashboard Report", ln=True, align="C")
     pdf.ln()
     pdf.cell(200, 10, txt=f"Total Items: {len(equipment_df)}", ln=True)
-    for col in equipment_df.columns:
-        if col.lower() in ["type", "equipment_type"]:
-            counts = equipment_df[col].dropna().astype(str).value_counts()
-            for val, count in counts.items():
-                pdf.cell(200, 10, txt=f"{val}: {count}", ln=True)
+
+    if "equipment_type" in equipment_df.columns:
+        type_counts = equipment_df["equipment_type"].dropna().astype(str).value_counts()
+        for t, count in type_counts.items():
+            pdf.cell(200, 10, txt=f"{t}: {count}", ln=True)
     if "status" in equipment_df.columns:
         status_counts = equipment_df["status"].dropna().astype(str).value_counts()
         for s, count in status_counts.items():
             pdf.cell(200, 10, txt=f"{s}: {count}", ln=True)
+
     pdf.output("dashboard_report.pdf")
     with open("dashboard_report.pdf", "rb") as f:
         st.download_button("📄 Download PDF Report", f, file_name="dashboard_report.pdf")
 
-# --- Email PDF Function ---
 def email_pdf():
     if st.button("📧 Email PDF Report"):
         msg = EmailMessage()
@@ -113,7 +106,7 @@ def email_pdf():
         except Exception as e:
             st.error(f"❌ Failed to send email: {e}")
 
-# --- Layout Memory ---
+# Layout Memory
 layout_file = f"layout_{user_email.replace('@','_at_')}.yaml"
 if os.path.exists(layout_file):
     with open(layout_file) as f:
@@ -137,6 +130,7 @@ for key in st.session_state.visible_widgets:
 with open(layout_file, "w") as f:
     yaml.dump(st.session_state.visible_widgets, f)
 
+# Sidebar Controls
 st.sidebar.subheader("📊 Chart Settings")
 chart_type = st.sidebar.radio("Chart Type", ["Bar", "Pie"])
 
@@ -147,16 +141,15 @@ end_date = st.sidebar.date_input("End Date", datetime.today())
 if st.sidebar.checkbox("🔄 Auto Refresh"):
     st.rerun()
 
-# --- KPI Cards ---
+# KPIs
 if st.session_state.visible_widgets.get("kpis"):
     st.subheader("📌 Key Stats")
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Equipment", len(equipment_df))
 
-    type_col = next((col for col in equipment_df.columns if col.lower() in ["type", "equipment_type"]), None)
-    if type_col:
-        equipment_df[type_col] = equipment_df[type_col].dropna().astype(str).str.strip()
-        type_counts = equipment_df[type_col].value_counts()
+    if "equipment_type" in equipment_df.columns:
+        equipment_df["equipment_type"] = equipment_df["equipment_type"].dropna().astype(str).str.strip()
+        type_counts = equipment_df["equipment_type"].value_counts()
         if not type_counts.empty:
             col2.metric(f"Top Type: {type_counts.index[0]}", type_counts.iloc[0])
             if len(type_counts) > 1:
@@ -167,25 +160,32 @@ if st.session_state.visible_widgets.get("kpis"):
             col2.write("No type data.")
             col3.write("—")
     else:
-        col2.write("No 'type' column.")
+        col2.write("No 'equipment_type' column.")
         col3.write("—")
 
-# --- Status Chart ---
+# Status Chart
 if st.session_state.visible_widgets.get("status_chart") and "status" in equipment_df.columns:
     st.subheader("Equipment Status")
     status_data = equipment_df["status"].dropna().astype(str).str.strip().str.title().value_counts().reset_index()
     status_data.columns = ["status", "count"]
-    if chart_type == "Bar":
-        chart = alt.Chart(status_data).mark_bar().encode(
-            x="status:N", y="count:Q", color="status:N", tooltip=["status", "count"]
-        )
-    else:
-        chart = alt.Chart(status_data).mark_arc().encode(
-            theta="count:Q", color="status:N", tooltip=["status", "count"]
-        )
+    chart = (
+        alt.Chart(status_data)
+        .mark_bar() if chart_type == "Bar" else alt.Chart(status_data).mark_arc()
+    ).encode(
+        x="status:N" if chart_type == "Bar" else alt.Undefined,
+        y="count:Q" if chart_type == "Bar" else alt.Undefined,
+        theta="count:Q" if chart_type == "Pie" else alt.Undefined,
+        color="status:N",
+        tooltip=["status", "count"]
+    )
     st.altair_chart(chart, use_container_width=True)
 
-# --- Maintenance Chart ---
+# Inventory Table
+if st.session_state.visible_widgets.get("inventory_table"):
+    st.subheader("Inventory Table")
+    st.dataframe(equipment_df, use_container_width=True)
+
+# Maintenance Chart
 if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
     st.subheader("🛠 Maintenance Activity")
     if "maintenance_date" in maintenance_df.columns:
@@ -207,7 +207,7 @@ if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance
     else:
         st.warning("No 'maintenance_date' column found.")
 
-# --- Scans Chart ---
+# Scans Chart
 if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
     st.subheader("📷 Barcode Scans Over Time")
     if "timestamp" in scans_df.columns:
@@ -228,7 +228,7 @@ if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
     else:
         st.warning("No 'timestamp' column found.")
 
-# --- Export & Email Report ---
+# Export & Email
 st.markdown("---")
 export_to_pdf()
 email_pdf()
