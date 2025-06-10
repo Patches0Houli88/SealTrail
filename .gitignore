@@ -6,7 +6,6 @@
 data/
 
 # Role and config YAMLs (contains emails, permissions, secrets)
-roles.yaml
 .streamlit/secrets.toml
 
 # Logs
