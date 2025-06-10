@@ -99,6 +99,23 @@ st.session_state.db_path = db_path
 st.title("Equipment & Inventory Tracking System")
 st.markdown(f"**Current DB**: `{st.session_state.selected_db}`")
 
+# --- Active Table Selection ---
+try:
+    conn = sqlite3.connect(db_path)
+    tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
+    conn.close()
+
+    if tables:
+        active_table = st.selectbox("Select active working table", tables, key="table_selector")
+        st.session_state.active_table = active_table
+        st.markdown(f"**Active Table**: `{active_table}`")
+    else:
+        st.warning("No tables found in the selected database.")
+        st.session_state.active_table = None
+except Exception as e:
+    st.warning(f"Error fetching tables: {e}")
+    st.session_state.active_table = None
+
 # --- Upload Inventory ---
 st.subheader("Upload Inventory File")
 uploaded_file = st.file_uploader("Upload CSV, Excel, JSON or TSV", type=["csv", "xlsx", "xls", "tsv", "json"])
