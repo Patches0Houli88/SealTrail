@@ -5,6 +5,10 @@ import qrcode
 from datetime import datetime
 import io
 import os
+from zipfile import ZipFile
+import altair as alt
+from email.message import EmailMessage
+import smtplib
 
 st.set_page_config(page_title="Barcode Scanner", layout="wide")
 st.title("📷 Scan & Track Equipment")
@@ -33,6 +37,7 @@ conn.execute("""
     CREATE TABLE IF NOT EXISTS scanned_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         equipment_id TEXT,
+        location TEXT,
         timestamp TEXT,
         scanned_by TEXT
     )
@@ -45,14 +50,13 @@ st.markdown("### 🔍 Scanner Status")
 camera_active = st.checkbox("🟢 Start Scanner")
 st.info("📸 Scanner is **active**." if camera_active else "⛔ Scanner is **inactive**.")
 
-# --- Asset ID Input ---
+# --- Scan Entry ---
 st.markdown("### 🏷️ Scan or Enter Equipment ID")
 equipment_id = st.text_input("Equipment ID (barcode or manual entry)", placeholder="e.g., EQP-001").strip()
+location = st.text_input("Location (optional)", placeholder="e.g., Warehouse A").strip()
 
 # --- Load Record if Exists ---
-record = None
-table_columns = []
-matching_col = None
+record, table_columns, matching_col = None, [], None
 if equipment_id and target_table:
     conn = sqlite3.connect(db_path)
     try:
@@ -68,21 +72,20 @@ if equipment_id and target_table:
     finally:
         conn.close()
 
-# --- QR Code Preview ---
+# --- QR Preview ---
 if equipment_id:
     qr = qrcode.make(equipment_id)
     buf = io.BytesIO()
     qr.save(buf)
     st.image(buf.getvalue(), caption="QR Code", width=150)
 
-# --- QR Batch Mode ---
+# --- Batch QR Mode ---
 with st.expander("📦 Generate QR Batch"):
     prefix = st.text_input("Prefix", value="EQP")
     start = st.number_input("Start Number", min_value=1, value=1)
     count = st.number_input("How many?", min_value=1, value=5)
     if st.button("Generate Batch QR Codes"):
         qr_zip = io.BytesIO()
-        from zipfile import ZipFile
         with ZipFile(qr_zip, 'w') as zf:
             for i in range(start, start + count):
                 id_code = f"{prefix}-{str(i).zfill(3)}"
@@ -92,7 +95,7 @@ with st.expander("📦 Generate QR Batch"):
                 zf.writestr(f"{id_code}.png", img_buf.getvalue())
         st.download_button("⬇️ Download QR ZIP", qr_zip.getvalue(), "qr_batch.zip")
 
-# --- Record Edit Form ---
+# --- Edit/Add Record ---
 if equipment_id:
     st.markdown("### ✏️ Edit or Add Entry")
     with st.form("update_form"):
@@ -110,32 +113,23 @@ if equipment_id:
         try:
             if record and matching_col:
                 clause = ", ".join([f"{k}=?" for k in updated])
-                conn.execute(
-                    f"UPDATE {target_table} SET {clause} WHERE {matching_col} = ?",
-                    list(updated.values()) + [equipment_id]
-                )
+                conn.execute(f"UPDATE {target_table} SET {clause} WHERE {matching_col} = ?", list(updated.values()) + [equipment_id])
                 st.success("Record updated.")
             else:
                 cols = ", ".join(updated.keys())
                 placeholders = ", ".join(["?" for _ in updated])
-                conn.execute(
-                    f"INSERT INTO {target_table} ({cols}) VALUES ({placeholders})",
-                    list(updated.values())
-                )
+                conn.execute(f"INSERT INTO {target_table} ({cols}) VALUES ({placeholders})", list(updated.values()))
                 st.success("New record added.")
 
-            # Log scan
-            conn.execute("INSERT INTO scanned_items (equipment_id, timestamp, scanned_by) VALUES (?, ?, ?)", 
-                         (equipment_id, str(datetime.now()), user_email))
+            conn.execute("INSERT INTO scanned_items (equipment_id, location, timestamp, scanned_by) VALUES (?, ?, ?, ?)",
+                         (equipment_id, location, str(datetime.now()), user_email))
             conn.commit()
             st.success("Scan recorded.")
-
         except Exception as e:
             st.error(f"Failed to save: {e}")
         finally:
             conn.close()
 
-        # --- Optional Auto-Attach Maintenance Log ---
         if st.checkbox("🛠 Attach Maintenance Log"):
             try:
                 conn = sqlite3.connect(db_path)
@@ -147,8 +141,8 @@ if equipment_id:
                     technician TEXT,
                     logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )""")
-                conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)", 
-                    (equipment_id, "Scanned and added via barcode page", str(datetime.today().date()), user_email))
+                conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
+                             (equipment_id, "Scanned and added via barcode page", str(datetime.today().date()), user_email))
                 conn.commit()
                 st.success("Maintenance log entry added.")
             except Exception as e:
@@ -156,12 +150,63 @@ if equipment_id:
             finally:
                 conn.close()
 
-# --- Recent Entries Preview ---
-st.markdown("### 📋 Recent Scans")
-try:
-    conn = sqlite3.connect(db_path)
-    scan_df = pd.read_sql("SELECT * FROM scanned_items ORDER BY timestamp DESC LIMIT 25", conn)
-    st.dataframe(scan_df, use_container_width=True)
-    conn.close()
-except Exception as e:
-    st.warning(f"Unable to preview scans: {e}")
+# --- Scan Log Analysis ---
+st.markdown("### 📋 Scan Log & Analysis")
+with sqlite3.connect(db_path) as conn:
+    scan_df = pd.read_sql("SELECT * FROM scanned_items ORDER BY timestamp DESC", conn)
+
+# --- Filters ---
+filter_col1, filter_col2 = st.columns(2)
+filter_date = filter_col1.date_input("📅 Filter by Date", value=datetime.today())
+filter_id = filter_col2.text_input("🔍 Filter by Equipment ID", "")
+
+filtered = scan_df.copy()
+if filter_date:
+    filtered = filtered[filtered["timestamp"].str.startswith(str(filter_date))]
+if filter_id:
+    filtered = filtered[filtered["equipment_id"].str.contains(filter_id, case=False, na=False)]
+
+# --- Colored Recent Table ---
+def color_rows(row):
+    return ['background-color: lightyellow' if i % 2 == 0 else '' for i in range(len(row))]
+
+st.dataframe(filtered.style.apply(color_rows, axis=1), use_container_width=True)
+
+# --- Scan Trend Chart ---
+if not scan_df.empty:
+    scan_df["timestamp"] = pd.to_datetime(scan_df["timestamp"], errors="coerce")
+    scan_df["scan_date"] = scan_df["timestamp"].dt.date
+    scan_trend = scan_df.groupby("scan_date").size().reset_index(name="scans")
+    chart = alt.Chart(scan_trend).mark_bar().encode(
+        x="scan_date:T", y="scans:Q"
+    ).properties(title="📈 Scans Over Time")
+    st.altair_chart(chart, use_container_width=True)
+
+# --- Group by Location or User ---
+with st.expander("📊 Grouped Summary"):
+    by = st.selectbox("Group scans by:", ["scanned_by", "location"])
+    summary = scan_df.groupby(by).size().reset_index(name="count")
+    st.bar_chart(summary.set_index(by))
+
+# --- Export & Email Options ---
+with st.expander("📤 Export or Email"):
+    csv_data = scan_df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV", csv_data, "scans.csv", mime="text/csv")
+
+    email_to = st.text_input("Email To")
+    if st.button("✉️ Email Logs") and email_to:
+        try:
+            msg = EmailMessage()
+            msg["Subject"] = "Scan Logs Export"
+            msg["From"] = "youremail@example.com"
+            msg["To"] = email_to
+            msg.set_content("Attached are the scan logs.")
+            msg.add_attachment(csv_data, maintype="text", subtype="csv", filename="scans.csv")
+
+            with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+                smtp.starttls()
+                smtp.login("youremail@example.com", "yourpassword")
+                smtp.send_message(msg)
+            st.success("Email sent!")
+        except Exception as e:
+            st.error(f"Failed to send email: {e}")
