@@ -1,241 +1,185 @@
 import streamlit as st
+import os
 import pandas as pd
 import sqlite3
-import altair as alt
-import os
-from datetime import datetime
-from fpdf import FPDF
-import smtplib
-from email.message import EmailMessage
 import yaml
 
-st.set_page_config(page_title="Custom Dashboard", layout="wide")
-st.title("📊 Equipment Dashboard")
+# --- Try-Except Around Auth for Stability ---
+try:
+    if not st.user.is_logged_in:
+        st.button("Log in with Google", on_click=st.login)
+        st.stop()
+    user_email = st.user.get("email", "unknown@example.com")
+    user_name = st.user.get("name", "Unknown")
+except Exception:
+    st.warning("User login unavailable. Falling back to default guest mode.")
+    user_email = "guest@example.com"
+    user_name = "Guest"
 
-# --- Get User Info ---
-user_email = st.session_state.get("user_email", "unknown@example.com")
-user_role = st.session_state.get("user_role", "guest")
-st.sidebar.markdown(f"Role: `{user_role}`  \n📧 **Email:** {user_email}")
+# --- Sidebar Info ---
+st.sidebar.markdown(f"Logged in as: {user_name}")
+st.sidebar.markdown(f"Email: {user_email}")
+if st.sidebar.button("Logout"):
+    try:
+        st.logout()
+    except Exception:
+        st.warning("Logout not supported in this environment.")
 
-# --- Validate DB Path ---
-db_path = st.session_state.get("db_path", None)
-if not db_path or not os.path.exists(db_path):
-    st.error("No valid database selected. Please return to the main page.")
+# --- User Directory ---
+user_dir = f"data/{user_email.replace('@', '_at_')}"
+os.makedirs(user_dir, exist_ok=True)
+
+# --- Load/Create Roles ---
+roles_config = {}
+if os.path.exists("roles.yaml"):
+    with open("roles.yaml") as f:
+        roles_config = yaml.safe_load(f) or {}
+roles_config.setdefault("users", {})
+if user_email not in roles_config["users"]:
+    roles_config["users"][user_email] = {
+        "role": "user",
+        "allowed_dbs": []
+    }
+    with open("roles.yaml", "w") as f:
+        yaml.safe_dump(roles_config, f)
+
+user_role = roles_config["users"][user_email]["role"]
+allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
+st.session_state["user_email"] = user_email
+st.session_state["user_role"] = user_role
+
+# --- Sidebar: DB Controls ---
+st.sidebar.write(f"Role: {user_role.capitalize()}")
+db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
+if allowed_dbs != ["all"]:
+    db_files = [db for db in db_files if db in allowed_dbs]
+
+# --- Create DB ---
+new_db_name = st.sidebar.text_input("Create new database", placeholder="example: inventory.db")
+if st.sidebar.button("Create DB") and new_db_name:
+    if not new_db_name.endswith(".db"):
+        new_db_name += ".db"
+    full_path = os.path.join(user_dir, new_db_name)
+    if not os.path.exists(full_path):
+        open(full_path, "w").close()
+        st.session_state.selected_db = new_db_name
+        if user_role != "admin":
+            roles_config["users"][user_email]["allowed_dbs"].append(new_db_name)
+            with open("roles.yaml", "w") as f:
+                yaml.safe_dump(roles_config, f)
+        st.success(f"Created: {new_db_name}")
+        st.rerun()
+    else:
+        st.sidebar.error("Database already exists.")
+
+# --- Select DB ---
+if db_files:
+    selected_db = st.sidebar.selectbox("Choose a database", db_files)
+    st.session_state.selected_db = selected_db
+else:
+    st.sidebar.warning("No databases found. Create one above.")
+
+# --- Delete DB ---
+if db_files:
+    deletable = db_files if user_role == "admin" else [db for db in db_files if db in allowed_dbs]
+    with st.sidebar.expander("Delete Database"):
+        db_to_delete = st.selectbox("Delete which?", deletable)
+        if st.button("Delete DB"):
+            os.remove(os.path.join(user_dir, db_to_delete))
+            if db_to_delete in roles_config["users"][user_email]["allowed_dbs"]:
+                roles_config["users"][user_email]["allowed_dbs"].remove(db_to_delete)
+                with open("roles.yaml", "w") as f:
+                    yaml.safe_dump(roles_config, f)
+            st.success(f"{db_to_delete} deleted.")
+            st.rerun()
+
+# --- Main Section ---
+if "selected_db" not in st.session_state:
+    st.warning("No database selected.")
     st.stop()
 
-# --- Get Active Table Name ---
-active_table = st.session_state.get("active_table", "equipment")
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
+db_path = os.path.join(user_dir, st.session_state.selected_db)
+st.session_state.db_path = db_path
+st.title("Equipment & Inventory Tracking System")
+st.markdown(f"**Current DB**: `{st.session_state.selected_db}`")
 
-# --- Ensure Tables Exist ---
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
+# --- Active Table Selection ---
 try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS maintenance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            equipment_id TEXT,
-            description TEXT,
-            maintenance_date TEXT,
-            technician TEXT,
-            logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    conn = sqlite3.connect(db_path)
+    tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
+    conn.close()
+    if tables:
+        active_table = st.selectbox("Select active working table", tables, key="table_selector")
+        st.session_state.active_table = active_table
+        st.markdown(f"**Active Table**: `{active_table}`")
+    else:
+        st.warning("No tables found in the selected database.")
+        st.session_state.active_table = None
 except Exception as e:
-    st.warning(f"Failed to ensure table maintenance exists: {e}")
+    st.warning(f"Error fetching tables: {e}")
+    st.session_state.active_table = None
 
-try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS scanned_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            Asset_ID TEXT,
-            Equipment_Type TEXT,
-            timestamp TEXT,
-            scanned_by TEXT
-        )
-    """)
-except Exception as e:
-    st.warning(f"Failed to ensure table scanned_items exists: {e}")
-conn.commit()
-
-# --- Load Tables ---
-def load_table(name):
+# --- Upload Inventory ---
+st.subheader("Upload Inventory File")
+uploaded_file = st.file_uploader("Upload CSV, Excel, JSON or TSV", type=["csv", "xlsx", "xls", "tsv", "json"])
+if uploaded_file:
     try:
-        return pd.read_sql_query(f"SELECT * FROM {name}", conn)
-    except Exception as e:
-        st.warning(f"Could not load table {name}: {e}")
-        return pd.DataFrame()
+        ext = uploaded_file.name.split(".")[-1].lower()
+        if ext == "csv":
+            df = pd.read_csv(uploaded_file)
+        elif ext == "tsv":
+            df = pd.read_csv(uploaded_file, sep="\t")
+        elif ext in ["xlsx", "xls"]:
+            df = pd.read_excel(uploaded_file)
+        elif ext == "json":
+            df = pd.read_json(uploaded_file)
+        else:
+            st.error("Unsupported file type.")
+            st.stop()
 
-equipment_df = load_table(active_table)
-maintenance_df = load_table("maintenance")
-scans_df = load_table("scanned_items")
-conn.close()
-
-# --- Normalize Casing for Compatibility ---
-equipment_df.columns = [col.lower() for col in equipment_df.columns]
-maintenance_df.columns = [col.lower() for col in maintenance_df.columns]
-scans_df.columns = [col.lower() for col in scans_df.columns]
-
-# Normalize key values
-for df in [equipment_df, maintenance_df, scans_df]:
-    if "equipment_id" in df.columns:
-        df["equipment_id"] = df["equipment_id"].astype(str).str.lower().str.strip()
-    if "equipment_type" in df.columns:
-        df["equipment_type"] = df["equipment_type"].astype(str).str.lower().str.strip()
-
-# --- PDF Export ---
-def export_to_pdf():
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="Equipment Dashboard Report", ln=True, align="C")
-    pdf.ln()
-    pdf.cell(200, 10, txt=f"Total Items: {len(equipment_df)}", ln=True)
-    if "equipment_type" in equipment_df.columns:
-        type_counts = equipment_df["equipment_type"].dropna().value_counts()
-        for t, count in type_counts.items():
-            pdf.cell(200, 10, txt=f"{t.title()}: {count}", ln=True)
-    if "status" in equipment_df.columns:
-        status_counts = equipment_df["status"].dropna().astype(str).value_counts()
-        for s, count in status_counts.items():
-            pdf.cell(200, 10, txt=f"{s.title()}: {count}", ln=True)
-    pdf.output("dashboard_report.pdf")
-    with open("dashboard_report.pdf", "rb") as f:
-        st.download_button("📄 Download PDF Report", f, file_name="dashboard_report.pdf")
-
-# --- Email PDF ---
-def email_pdf():
-    if st.button("📧 Email PDF Report"):
-        msg = EmailMessage()
-        msg["Subject"] = "Your Equipment Dashboard Report"
-        msg["From"] = "youremail@example.com"
-        msg["To"] = user_email
-        msg.set_content("Attached is your latest equipment dashboard report.")
-        with open("dashboard_report.pdf", "rb") as f:
-            msg.add_attachment(f.read(), maintype="application", subtype="pdf", filename="dashboard_report.pdf")
+        conn = sqlite3.connect(db_path)
         try:
-            with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                server.starttls()
-                server.login("youremail@example.com", "yourpassword")
-                server.send_message(msg)
-            st.success("📤 Email sent to " + user_email)
-        except Exception as e:
-            st.error(f"❌ Failed to send email: {e}")
+            existing_cols = pd.read_sql("SELECT * FROM equipment LIMIT 1", conn).columns.tolist()
+            st.warning("Column mismatch detected. Please map your columns.")
+            col_mapping = {}
+            for col in existing_cols:
+                col_mapping[col] = st.selectbox(f"Map '{col}' to:", df.columns, key=col)
+            df = df.rename(columns=col_mapping)[existing_cols]
+        except:
+            pass
 
-# --- Layout Memory ---
-layout_file = f"layout_{user_email.replace('@','_at_')}.yaml"
-if os.path.exists(layout_file):
-    with open(layout_file) as f:
-        st.session_state.visible_widgets = yaml.safe_load(f)
-else:
-    st.session_state.visible_widgets = {
-        "kpis": True,
-        "status_chart": True,
-        "inventory_table": True,
-        "maintenance_chart": user_role == "admin",
-        "scans_chart": user_role == "admin"
-    }
+        st.dataframe(df)
 
-# --- Sidebar Layout Options ---
-st.sidebar.subheader("🧩 Dashboard Sections")
-for key in st.session_state.visible_widgets:
-    if user_role == "admin" or key not in ["maintenance_chart", "scans_chart"]:
-        st.session_state.visible_widgets[key] = st.sidebar.checkbox(
-            key.replace("_", " ").title(), st.session_state.visible_widgets[key]
-        )
+        if st.button("Save to DB"):
+            df.to_sql("equipment", conn, if_exists="replace", index=False)
+            conn.commit()
+            st.success("Saved to DB.")
+        conn.close()
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
 
-with open(layout_file, "w") as f:
-    yaml.dump(st.session_state.visible_widgets, f)
+# --- Show Inventory ---
+try:
+    with sqlite3.connect(db_path) as conn:
+        existing_df = pd.read_sql("SELECT * FROM equipment", conn)
+        if not existing_df.empty:
+            st.subheader("Current Inventory")
+            st.dataframe(existing_df)
+except:
+    st.info("No inventory data found.")
 
-st.sidebar.subheader("📊 Chart Settings")
-chart_type = st.sidebar.radio("Chart Type", ["Bar", "Pie"])
-
-st.sidebar.subheader("📅 Date Filter")
-start_date = st.sidebar.date_input("Start Date", datetime.today().replace(day=1))
-end_date = st.sidebar.date_input("End Date", datetime.today())
-
-if st.sidebar.checkbox("🔄 Auto Refresh"):
-    st.rerun()
-
-# --- KPIs ---
-if st.session_state.visible_widgets.get("kpis"):
-    st.subheader("📌 Key Stats")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Equipment", len(equipment_df))
-
-    type_col = [col for col in equipment_df.columns if col in ["type", "equipment_type"]]
-    if type_col:
-        counts = equipment_df[type_col[0]].value_counts()
-        if not counts.empty:
-            col2.metric(f"Top Type", counts.index[0].title())
-            if len(counts) > 1:
-                col3.metric(f"2nd Type", counts.index[1].title())
-            else:
-                col3.write("Only one type found.")
-        else:
-            col2.write("No type data.")
-            col3.write("—")
-    else:
-        col2.write("No 'type' column.")
-        col3.write("—")
-
-# --- Status Chart ---
-if st.session_state.visible_widgets.get("status_chart") and "status" in equipment_df.columns:
-    st.subheader("Equipment Status")
-    status_data = equipment_df["status"].dropna().astype(str).str.title().value_counts().reset_index()
-    status_data.columns = ["status", "count"]
-    chart = alt.Chart(status_data).mark_bar().encode(
-        x="status:N", y="count:Q", color="status:N", tooltip=["status", "count"]
-    ) if chart_type == "Bar" else alt.Chart(status_data).mark_arc().encode(
-        theta="count:Q", color="status:N", tooltip=["status", "count"]
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-# --- Inventory Table ---
-if st.session_state.visible_widgets.get("inventory_table"):
-    st.subheader("Inventory Table")
-    st.dataframe(equipment_df, use_container_width=True)
-
-# --- Maintenance Chart ---
-if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
-    st.subheader("🛠 Maintenance Activity")
-    if "maintenance_date" in maintenance_df.columns:
-        maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
-        filtered = maintenance_df.dropna(subset=["maintenance_date"])
-        filtered = filtered[(filtered["maintenance_date"] >= pd.to_datetime(start_date)) & (filtered["maintenance_date"] <= pd.to_datetime(end_date))]
-        if not filtered.empty:
-            chart = alt.Chart(filtered).mark_bar().encode(
-                x="maintenance_date:T", y="count():Q", tooltip=["maintenance_date"]
-            ).transform_aggregate(
-                count="count()", groupby=["maintenance_date"]
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No maintenance logs in range.")
-    else:
-        st.warning("No 'maintenance_date' column.")
-
-# --- Scans Chart ---
-if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
-    st.subheader("📷 Barcode Scans Over Time")
-    if "timestamp" in scans_df.columns:
-        scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
-        filtered = scans_df.dropna(subset=["timestamp"])
-        filtered["date"] = filtered["timestamp"].dt.date
-        filtered = filtered[(filtered["date"] >= start_date) & (filtered["date"] <= end_date)]
-        if not filtered.empty:
-            scan_data = filtered.groupby("date").size().reset_index(name="scan_count")
-            chart = alt.Chart(scan_data).mark_line(point=True).encode(
-                x="date:T", y="scan_count:Q", tooltip=["date", "scan_count"]
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No scan activity in date range.")
-    else:
-        st.warning("No 'timestamp' column found.")
-
-# --- Export/Email ---
-st.markdown("---")
-export_to_pdf()
-email_pdf()
-st.caption("Customize layout, filter by date, export or email results.")
+# --- Dashboard Summary ---
+st.subheader("📊 Dashboard Summary")
+with sqlite3.connect(db_path) as conn:
+    try:
+        st.metric("Inventory Items", pd.read_sql("SELECT COUNT(*) as count FROM equipment", conn)["count"][0])
+    except:
+        st.metric("Inventory Items", 0)
+    try:
+        st.metric("Maintenance Logs", pd.read_sql("SELECT COUNT(*) as count FROM maintenance", conn)["count"][0])
+    except:
+        st.metric("Maintenance Logs", 0)
+    try:
+        st.metric("Barcode Scans", pd.read_sql("SELECT COUNT(*) as count FROM scanned_items", conn)["count"][0])
+    except:
+        st.metric("Barcode Scans", 0)
