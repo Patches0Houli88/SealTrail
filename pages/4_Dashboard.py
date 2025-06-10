@@ -24,6 +24,34 @@ if not db_path or not os.path.exists(db_path):
     st.error("No valid database selected. Please return to the main page.")
     st.stop()
 
+# --- Ensure Required Tables Exist ---
+required_tables = {
+    "maintenance": """
+        CREATE TABLE IF NOT EXISTS maintenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            equipment_id TEXT,
+            description TEXT,
+            maintenance_date TEXT,
+            technician TEXT,
+            logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+    "scanned_items": """
+        CREATE TABLE IF NOT EXISTS scanned_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Asset_ID TEXT,
+            scanned_by TEXT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """
+}
+
+for table, ddl in required_tables.items():
+    try:
+        conn.execute(ddl)
+    except Exception as e:
+        st.warning(f"Failed to ensure table `{table}` exists: {e}")
+        
 # --- Get Active Table Name ---
 active_table = st.session_state.get("active_table")
 if not active_table:
