@@ -4,114 +4,137 @@ import sqlite3
 import altair as alt
 import os
 from datetime import datetime
+import yaml
+from fpdf import FPDF
+import smtplib
+from email.message import EmailMessage
 
-st.set_page_config(page_title="Dashboard", layout="wide")
+st.set_page_config(page_title="Equipment Dashboard", layout="wide")
 st.title("📊 Equipment Dashboard")
 
-# --- Validate DB Path ---
-db_path = st.session_state.get("db_path")
-active_table = st.session_state.get("active_table", "equipment")
+# --- Get User Info ---
+user_email = st.session_state.get("user_email", "unknown@example.com")
+user_role = st.session_state.get("user_role", "guest")
 
+# --- Validate DB Path ---
+db_path = st.session_state.get("db_path", None)
 if not db_path or not os.path.exists(db_path):
     st.error("No valid database selected. Please return to the main page.")
     st.stop()
 
-st.sidebar.info(f"Active Table: `{active_table}`")
+# --- Active Table ---
+active_table = st.session_state.get("active_table", "equipment")
+st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
-# --- Load Tables ---
-conn = sqlite3.connect(db_path)
-def load(name):
-    try:
-        df = pd.read_sql(f"SELECT * FROM {name}", conn)
-        df.columns = [c.lower() for c in df.columns]
-        return df
-    except:
-        return pd.DataFrame()
+# --- Sidebar: Layout Toggles ---
+layout_file = f"layout_{user_email.replace('@','_at_')}.yaml"
+if os.path.exists(layout_file):
+    with open(layout_file) as f:
+        st.session_state.visible_widgets = yaml.safe_load(f)
+else:
+    st.session_state.visible_widgets = {
+        "kpis": True,
+        "status_chart": True,
+        "inventory_table": True,
+        "maintenance_chart": user_role == "admin",
+        "scans_chart": user_role == "admin"
+    }
 
-main_df = load(active_table)
-maintenance_df = load("maintenance")
-scans_df = load("scanned_items")
-conn.close()
+# Sidebar toggles
+st.sidebar.subheader("🧩 Dashboard Sections")
+for key in st.session_state.visible_widgets:
+    if user_role == "admin" or key not in ["maintenance_chart", "scans_chart"]:
+        st.session_state.visible_widgets[key] = st.sidebar.checkbox(
+            key.replace("_", " ").title(), st.session_state.visible_widgets[key]
+        )
 
-# Normalize IDs
-main_df.rename(columns={"asset_id": "equipment_id"}, inplace=True)
+# Sidebar chart controls
+st.sidebar.subheader("📊 Chart Type")
+chart_type = st.sidebar.radio("Select chart type", ["Bar", "Pie"])
 
-# --- Date Range ---
 st.sidebar.subheader("📅 Date Filter")
 start_date = st.sidebar.date_input("Start Date", datetime.today().replace(day=1))
 end_date = st.sidebar.date_input("End Date", datetime.today())
 
-# --- KPIs ---
-st.subheader("📌 KPIs")
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Items", len(main_df))
+if st.sidebar.checkbox("🔄 Auto Refresh"):
+    st.rerun()
 
-type_col = next((c for c in main_df.columns if "type" in c), None)
-if type_col:
-    counts = main_df[type_col].dropna().astype(str).value_counts()
-    if not counts.empty:
-        col2.metric("Top Type", counts.index[0])
-        col3.metric("2nd Type", counts.index[1] if len(counts) > 1 else "—")
-    else:
-        col2.write("No type data")
-        col3.write("—")
-else:
-    col2.write("No type column")
-    col3.write("—")
+# Save layout state
+with open(layout_file, "w") as f:
+    yaml.dump(st.session_state.visible_widgets, f)
+
+# --- Load Tables ---
+conn = sqlite3.connect(db_path)
+def load_table(name):
+    try:
+        return pd.read_sql_query(f"SELECT * FROM {name}", conn)
+    except:
+        return pd.DataFrame()
+
+equipment_df = load_table(active_table)
+maintenance_df = load_table("maintenance_log")
+scans_df = load_table("scanned_items")
+conn.close()
+
+# --- KPI ---
+if st.session_state.visible_widgets.get("kpis"):
+    st.subheader("📌 Key Stats")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Records", len(equipment_df))
+
+    # Normalize column case
+    cols_lower = {c.lower(): c for c in equipment_df.columns}
+    type_col = cols_lower.get("equipment_type") or cols_lower.get("type")
+    if type_col:
+        top_types = equipment_df[type_col].astype(str).str.strip().value_counts()
+        if not top_types.empty:
+            col2.metric("Top Type", top_types.index[0])
+            if len(top_types) > 1:
+                col3.metric("2nd Type", top_types.index[1])
 
 # --- Status Chart ---
-status_col = next((c for c in main_df.columns if "status" in c), None)
-if status_col:
-    st.subheader("📦 Status Distribution")
-    data = main_df[status_col].dropna().astype(str).str.title().value_counts().reset_index()
-    data.columns = ["Status", "Count"]
-    st.altair_chart(
-        alt.Chart(data).mark_bar().encode(
-            x="Status:N", y="Count:Q", color="Status:N", tooltip=["Status", "Count"]
-        ),
-        use_container_width=True
-    )
+if st.session_state.visible_widgets.get("status_chart"):
+    st.subheader("📦 Equipment Status")
+    status_col = next((col for col in equipment_df.columns if col.lower() == "status"), None)
+    if status_col:
+        status_data = equipment_df[status_col].dropna().astype(str).str.title().value_counts().reset_index()
+        status_data.columns = ["status", "count"]
+        if chart_type == "Bar":
+            chart = alt.Chart(status_data).mark_bar().encode(x="status:N", y="count:Q", color="status:N")
+        else:
+            chart = alt.Chart(status_data).mark_arc().encode(theta="count:Q", color="status:N")
+        st.altair_chart(chart, use_container_width=True)
+
+# --- Inventory Table ---
+if st.session_state.visible_widgets.get("inventory_table"):
+    st.subheader("📋 Current Active Table")
+    st.dataframe(equipment_df, use_container_width=True)
 
 # --- Maintenance Chart ---
-if not maintenance_df.empty:
-    st.subheader("🛠 Maintenance Over Time")
-    if "maintenance_date" in maintenance_df.columns:
-        maintenance_df["maintenance_date"] = pd.to_datetime(maintenance_df["maintenance_date"], errors="coerce")
-        filtered = maintenance_df.dropna(subset=["maintenance_date"])
-        filtered = filtered[
-            (filtered["maintenance_date"] >= pd.to_datetime(start_date)) &
-            (filtered["maintenance_date"] <= pd.to_datetime(end_date))
+if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
+    st.subheader("🛠 Maintenance Logs Over Time")
+    if "date" in maintenance_df.columns:
+        maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
+        filtered = maintenance_df[
+            (maintenance_df["date"] >= pd.to_datetime(start_date)) &
+            (maintenance_df["date"] <= pd.to_datetime(end_date))
         ]
-        if not filtered.empty:
-            chart = alt.Chart(filtered).mark_bar().encode(
-                x="maintenance_date:T",
-                y="count():Q",
-                tooltip=["maintenance_date"]
-            ).transform_aggregate(
-                count="count()", groupby=["maintenance_date"]
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No maintenance in selected range.")
+        chart = alt.Chart(filtered).mark_bar().encode(
+            x="date:T", y="count():Q"
+        ).transform_aggregate(count="count()", groupby=["date"])
+        st.altair_chart(chart, use_container_width=True)
 
 # --- Scans Chart ---
-if not scans_df.empty:
+if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
     st.subheader("📷 Scans Over Time")
     if "timestamp" in scans_df.columns:
         scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
-        scans_df = scans_df.dropna(subset=["timestamp"])
-        scans_df["date"] = scans_df["timestamp"].dt.date
+        scans_df["scan_date"] = scans_df["timestamp"].dt.date
         filtered = scans_df[
-            (scans_df["date"] >= start_date) & (scans_df["date"] <= end_date)
+            (scans_df["scan_date"] >= start_date) & (scans_df["scan_date"] <= end_date)
         ]
-        if not filtered.empty:
-            chart = alt.Chart(filtered.groupby("date").size().reset_index(name="count")).mark_line(point=True).encode(
-                x="date:T", y="count:Q", tooltip=["date", "count"]
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No scans in selected range.")
-
-# --- Show Table Data ---
-st.subheader(f"📄 `{active_table}` Table")
-st.dataframe(main_df, use_container_width=True)
+        scan_data = filtered.groupby("scan_date").size().reset_index(name="count")
+        chart = alt.Chart(scan_data).mark_line(point=True).encode(
+            x="scan_date:T", y="count:Q"
+        )
+        st.altair_chart(chart, use_container_width=True)
