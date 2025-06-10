@@ -76,35 +76,40 @@ maintenance_df = load_table("maintenance_log")
 scans_df = load_table("scanned_items")
 conn.close()
 
-# --- Maintenance Sync (Show last maintenance info per equipment) ---
+# --- Merge Maintenance Date Info ---
 if not maintenance_df.empty:
     maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
 
-    latest_maintenance = (
-        maintenance_df.sort_values("date")
-        .dropna(subset=["equipment_id"])
-        .drop_duplicates(subset=["equipment_id"], keep="last")[["equipment_id", "date"]]
-    )
-    
-    # Normalize types for merge
-    latest_maintenance["equipment_id"] = latest_maintenance["equipment_id"].astype(str).str.lower()
+    # Ensure 'equipment_id' is string
+    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
 
+    # Normalize the ID column in equipment_df
     equipment_df = equipment_df.copy()
-    id_col = next((col for col in equipment_df.columns if col.lower() in ["equipment_id", "asset_id"]), None)
+    id_col = next((col for col in equipment_df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
 
     if id_col:
-        equipment_df[id_col] = equipment_df[id_col].astype(str).str.lower()
+        equipment_df[id_col] = equipment_df[id_col].astype(str).str.strip()
+
+        # Latest maintenance by equipment_id
+        latest_maintenance = (
+            maintenance_df.sort_values("date")
+            .dropna(subset=["equipment_id"])
+            .drop_duplicates(subset=["equipment_id"], keep="last")[["equipment_id", "date"]]
+        )
+
+        # Merge safely
         equipment_df = equipment_df.merge(
             latest_maintenance,
             how="left",
             left_on=id_col,
             right_on="equipment_id"
         )
-        equipment_df["maintenance_status"] = equipment_df["date"].apply(
-            lambda x: "🟢 Recent" if pd.notnull(x) and (datetime.today() - x).days <= 30
-            else ("🔴 Old" if pd.notnull(x) else "⚪ Never")
-        )
 
+        # Maintenance freshness indicator
+        equipment_df["maintenance_status"] = equipment_df["date"].apply(
+            lambda d: "🟢 Recent" if pd.notna(d) and (datetime.today() - d).days <= 30
+            else ("🔴 Old" if pd.notna(d) else "⚪ Never")
+        )
 # --- KPI ---
 if st.session_state.visible_widgets.get("kpis"):
     st.subheader("📌 Key Stats")
