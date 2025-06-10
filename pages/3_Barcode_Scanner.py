@@ -3,6 +3,11 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import os
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+import av
+from pyzbar.pyzbar import decode
+import numpy as np
+import cv2
 
 st.set_page_config(page_title="Barcode Scanner", layout="wide")
 st.title("📷 Scan Equipment (by Asset ID)")
@@ -37,7 +42,35 @@ tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)[
 conn.close()
 st.sidebar.subheader("📂 Choose Target Table")
 target_table = st.sidebar.selectbox("Scan against table", tables)
+# --- Live Camera Scanner Toggle ---
+st.subheader("📸 Scanner Options")
 
+scanner_enabled = st.checkbox("Start Scanner", value=False)
+scan_status = st.empty()
+
+class BarcodeScanner(VideoTransformerBase):
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        barcodes = decode(img)
+        for obj in barcodes:
+            barcode = obj.data.decode("utf-8")
+            st.session_state.scanned_barcode = barcode
+            cv2.putText(img, f"Scanned: {barcode}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        return img
+
+if scanner_enabled:
+    st.info("Scanner is active. Hold barcode in front of camera.")
+    webrtc_streamer(key="scanner", video_processor_factory=BarcodeScanner)
+    scan_status.text("🔍 Scanning...")
+else:
+    scan_status.text("Scanner is disabled.")
+
+# --- Manual Entry Fallback ---
+st.subheader("🔢 Enter Barcode Manually")
+manual_entry = st.text_input("Asset ID (manual entry)", key="manual_barcode")
+
+# Use scanned OR manual value
+asset_id = st.session_state.get("scanned_barcode") or manual_entry
 # --- Barcode Input ---
 st.subheader("📥 Scan or Enter Asset ID")
 asset_id = st.text_input("Asset ID (scanned or typed)", placeholder="e.g. ABC123")
