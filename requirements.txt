@@ -1,11 +1,10 @@
 streamlit
-pyzbar
-authlib>=1.3.2
 pandas
-altair
-opencv-python-headless
-pyyaml
+PyYAML
 fpdf==1.7.2
-streamlit-webrtc
+altair
+qrcode
+pyzbar
+opencv-python-headless
 streamlit-qrcode-scanner
-qrcode[pil]
+streamlit-webrtc
