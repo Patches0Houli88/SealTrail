@@ -16,7 +16,9 @@ st.sidebar.markdown(f"Logged in as: {user_name}")
 st.sidebar.markdown(f"Email: {user_email}")
 if st.sidebar.button("Logout"):
     st.logout()
-
+# --- User Directory ---
+user_dir = f"data/{user_email.replace('@', '_at_')}"
+os.makedirs(user_dir, exist_ok=True)
 # --- Load/Create Roles ---
 roles_config = {}
 if os.path.exists("roles.yaml"):
@@ -40,10 +42,6 @@ user_role = roles_config["users"][user_email]["role"]
 allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
 st.session_state["user_email"] = user_email
 st.session_state["user_role"] = user_role
-
-# --- User Directory ---
-user_dir = f"data/{user_email.replace('@', '_at_')}"
-os.makedirs(user_dir, exist_ok=True)
 
 # --- Sidebar: Role and DB Management ---
 st.sidebar.write(f"Role: {user_role.capitalize()}")
