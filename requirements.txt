@@ -9,3 +9,5 @@ PyYAML
 fpdf==1.7.2
 streamlit_webrtc
 qrcode[pil]
+opencv-python-headless
+streamlit-webrtc
