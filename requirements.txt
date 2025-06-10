@@ -8,4 +8,4 @@ pyyaml
 fpdf==1.7.2
 streamlit-webrtc
 streamlit-qrcode-scanner
-"qrcode[pil]"
+qrcode[pil]
