@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 import altair as alt
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import yaml
 from fpdf import FPDF
 import smtplib
@@ -26,7 +26,7 @@ if not db_path or not os.path.exists(db_path):
 active_table = st.session_state.get("active_table", "equipment")
 st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
-# --- Sidebar Layout Settings ---
+# --- Sidebar: Layout Toggles ---
 layout_file = f"layout_{user_email.replace('@','_at_')}.yaml"
 if os.path.exists(layout_file):
     with open(layout_file) as f:
@@ -37,17 +37,18 @@ else:
         "status_chart": True,
         "inventory_table": True,
         "maintenance_chart": user_role == "admin",
-        "scans_chart": user_role == "admin",
-        "scan_grouping": user_role == "admin"
+        "scans_chart": user_role == "admin"
     }
 
+# Sidebar toggles
 st.sidebar.subheader("🧩 Dashboard Sections")
 for key in st.session_state.visible_widgets:
-    if user_role == "admin" or key not in ["maintenance_chart", "scans_chart", "scan_grouping"]:
+    if user_role == "admin" or key not in ["maintenance_chart", "scans_chart"]:
         st.session_state.visible_widgets[key] = st.sidebar.checkbox(
             key.replace("_", " ").title(), st.session_state.visible_widgets[key]
         )
 
+# Sidebar chart controls
 st.sidebar.subheader("📊 Chart Type")
 chart_type = st.sidebar.radio("Select chart type", ["Bar", "Pie"])
 
@@ -75,13 +76,23 @@ maintenance_df = load_table("maintenance_log")
 scans_df = load_table("scanned_items")
 conn.close()
 
-# --- KPI Section ---
+# --- Merge Maintenance Date Info ---
+if not maintenance_df.empty:
+    maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
+    latest_maintenance = maintenance_df.groupby("equipment_id")["date"].max().reset_index()
+    equipment_df = equipment_df.copy()
+    id_col = next((col for col in equipment_df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+    if id_col:
+        equipment_df = equipment_df.merge(latest_maintenance, how="left", left_on=id_col, right_on="equipment_id")
+        equipment_df["maintenance_status"] = equipment_df["date"].apply(lambda d: "🟢 Recent" if pd.notna(d) and (datetime.today() - d).days <= 30 else ("🔴 Old" if pd.notna(d) else "⚪ Never"))
+
+# --- KPI ---
 if st.session_state.visible_widgets.get("kpis"):
     st.subheader("📌 Key Stats")
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Records", len(equipment_df))
 
-    # Normalize for equipment_type
+    # Normalize column case
     cols_lower = {c.lower(): c for c in equipment_df.columns}
     type_col = cols_lower.get("equipment_type") or cols_lower.get("type")
     if type_col:
@@ -91,7 +102,7 @@ if st.session_state.visible_widgets.get("kpis"):
             if len(top_types) > 1:
                 col3.metric("2nd Type", top_types.index[1])
 
-# --- Equipment Status Chart ---
+# --- Status Chart ---
 if st.session_state.visible_widgets.get("status_chart"):
     st.subheader("📦 Equipment Status")
     status_col = next((col for col in equipment_df.columns if col.lower() == "status"), None)
@@ -123,7 +134,7 @@ if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance
         ).transform_aggregate(count="count()", groupby=["date"])
         st.altair_chart(chart, use_container_width=True)
 
-# --- Scans Over Time Chart ---
+# --- Scans Chart ---
 if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
     st.subheader("📷 Scans Over Time")
     if "timestamp" in scans_df.columns:
@@ -137,39 +148,3 @@ if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
             x="scan_date:T", y="count:Q"
         )
         st.altair_chart(chart, use_container_width=True)
-
-# --- Scan Grouping by User or Location ---
-if st.session_state.visible_widgets.get("scan_grouping") and not scans_df.empty:
-    st.subheader("👤 Scan Activity by User/Location")
-    group_by = st.selectbox("Group scans by:", ["scanned_by", "location"])
-    if group_by in scans_df.columns:
-        group_data = scans_df[group_by].fillna("Unknown").value_counts().reset_index()
-        group_data.columns = [group_by, "count"]
-        chart = alt.Chart(group_data).mark_bar().encode(
-            x=alt.X(group_by, sort='-y'), y="count:Q", color=group_by
-        )
-        st.altair_chart(chart, use_container_width=True)
-
-# --- Export or Email Logs ---
-st.subheader("📤 Export Scan Logs")
-if not scans_df.empty:
-    export = scans_df.copy()
-    csv = export.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV", csv, "scanned_items.csv", mime="text/csv")
-
-    if user_role == "admin":
-        with st.expander("📧 Email Logs"):
-            recipient = st.text_input("Recipient Email")
-            if st.button("Send Email"):
-                try:
-                    msg = EmailMessage()
-                    msg["Subject"] = "Scan Logs"
-                    msg["From"] = "sealtrail@app.com"
-                    msg["To"] = recipient
-                    msg.set_content("Attached are the scan logs.")
-                    msg.add_attachment(csv, filename="scanned_items.csv", maintype="text", subtype="csv")
-                    with smtplib.SMTP("localhost") as server:
-                        server.send_message(msg)
-                    st.success("Email sent.")
-                except Exception as e:
-                    st.error(f"Failed to send email: {e}")
