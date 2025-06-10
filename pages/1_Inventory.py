@@ -8,16 +8,11 @@ from datetime import datetime
 st.set_page_config(page_title="Inventory", layout="wide")
 st.title("Inventory Management")
 
-# --- Get user role and email ---
+# --- Session Validation ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
+st.sidebar.markdown(f"Role: {user_role} | Email: {user_email}")
 
-st.sidebar.markdown(f" Role: {user_role} | Email: {user_email}")
-
-if "user_email" not in st.session_state or "user_role" not in st.session_state:
-    st.error("User not recognized. Please go to the main page and log in again.")
-    st.stop()
-# --- Check for active DB ---
 if "db_path" not in st.session_state:
     st.warning("No database selected. Please choose one from the main page.")
     st.stop()
@@ -25,36 +20,29 @@ if "db_path" not in st.session_state:
 conn = sqlite3.connect(st.session_state.db_path)
 cursor = conn.cursor()
 
-# Fallback to load role if not already in session
-if "user_role" not in st.session_state:
-    user_email = st.session_state.get("user_email", "unknown@example.com")
-    st.session_state.user_email = user_email  # ensure set
-    if os.path.exists("roles.yaml"):
-        with open("roles.yaml") as f:
-            roles = yaml.safe_load(f)
-        st.session_state.user_role = roles.get("users", {}).get(user_email, {}).get("role", "guest")
+# --- Determine Active Table ---
+active_table = st.session_state.get("active_table", "equipment")
+st.markdown(f"**Editing Table:** `{active_table}`")
 
-user_email = st.session_state.get("user_email", "")
-user_role = st.session_state.user_role
-st.caption(f"🔍 Role: {user_role} | Email: {user_email}")
-# --- Load Data ---
+# --- Load Data from Selected Table ---
 def load_data():
     try:
-        return pd.read_sql("SELECT rowid, * FROM equipment", conn)
-    except:
+        return pd.read_sql(f"SELECT rowid, * FROM {active_table}", conn)
+    except Exception as e:
+        st.warning(f"Could not load table: {e}")
         return pd.DataFrame()
 
 df = load_data()
 
-# --- Admin-only Column Add ---
+# --- Admin: Add New Column ---
 if user_role == "admin":
     st.subheader("🔧 Admin Tools")
     with st.expander("➕ Add New Column"):
         new_col_name = st.text_input("Column name", key="admin_add_column")
         new_col_type = st.selectbox("Column type", ["TEXT", "INTEGER", "REAL"], key="admin_col_type")
-        if st.button("Add Column") and new_col_name:
+        if st.button("Add Column"):
             try:
-                cursor.execute(f"ALTER TABLE equipment ADD COLUMN {new_col_name} {new_col_type}")
+                cursor.execute(f"ALTER TABLE {active_table} ADD COLUMN {new_col_name} {new_col_type}")
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         timestamp TEXT, action TEXT, user TEXT, detail TEXT
@@ -68,7 +56,7 @@ if user_role == "admin":
             except Exception as e:
                 st.error(f"Error adding column: {e}")
 
-# --- Add New Inventory Item ---
+# --- Add New Entry ---
 if not df.empty:
     st.subheader("Add New Item")
     col_names = df.columns.drop(["rowid", "selected"], errors="ignore")
@@ -83,27 +71,25 @@ if not df.empty:
         else:
             new_data[col] = cols[i].text_input(col, key=f"input_{col}")
 
-    if st.button("Add to Inventory"):
+    if st.button("Add to Table"):
         values = tuple(new_data[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
-        cursor.execute(f"INSERT INTO equipment ({', '.join(col_names)}) VALUES ({placeholders})", values)
+        cursor.execute(f"INSERT INTO {active_table} ({', '.join(col_names)}) VALUES ({placeholders})", values)
         conn.commit()
-        st.success("Item added!")
+        st.success("Item added.")
         st.rerun()
 
-# --- Edit Table with Checkbox-based Delete ---
+# --- Edit / Delete ---
 st.subheader("Edit & Delete Items")
 if df.empty:
-    st.info("No data available.")
+    st.info("No data found.")
 else:
     filter_col = st.selectbox("Filter by column", df.columns.drop("rowid"))
     filter_val = st.text_input("Contains:")
     if filter_val:
         df = df[df[filter_col].astype(str).str.contains(filter_val, na=False)]
 
-    # Add checkbox column
     df["selected"] = False
-
     editable_df = st.data_editor(
         df,
         use_container_width=True,
@@ -113,8 +99,8 @@ else:
     )
 
     if st.button("Save Changes"):
-        cursor.execute("DELETE FROM equipment")
-        editable_df.drop(columns=["rowid", "selected"]).to_sql("equipment", conn, if_exists="append", index=False)
+        cursor.execute(f"DELETE FROM {active_table}")
+        editable_df.drop(columns=["rowid", "selected"]).to_sql(active_table, conn, if_exists="append", index=False)
         conn.commit()
         st.success("Changes saved.")
         st.rerun()
@@ -122,7 +108,7 @@ else:
     if st.button("Delete Checked Rows"):
         to_delete = editable_df[editable_df["selected"] == True]["rowid"].tolist()
         if to_delete:
-            cursor.executemany("DELETE FROM equipment WHERE rowid = ?", [(rid,) for rid in to_delete])
+            cursor.executemany(f"DELETE FROM {active_table} WHERE rowid = ?", [(rid,) for rid in to_delete])
             conn.commit()
             st.success(f"Deleted {len(to_delete)} rows.")
             st.rerun()
