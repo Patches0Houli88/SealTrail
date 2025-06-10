@@ -1,19 +1,37 @@
-# Ignore all SQLite database files
+# SQLite database files
 *.db
+*.sqlite3
 
-# Ignore user-generated data directories
+# User-generated data
 data/
 
-# Ignore user role config (contains emails and permissions)
+# Role and config YAMLs (contains emails, permissions, secrets)
 roles.yaml
-
-# Ignore Python cache
-__pycache__/
-*.pyc
-
-# Optional: Ignore Jupyter notebooks (if you use them locally)
-*.ipynb
-
-# Streamlit secrets and logs
 .streamlit/secrets.toml
+
+# Logs
 *.log
+
+# Python cache and compiled bytecode
+__pycache__/
+*.py[cod]
+
+# Jupyter notebooks (optional)
+*.ipynb
+.ipynb_checkpoints/
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# MacOS/Windows OS clutter
+.DS_Store
+Thumbs.db
+
+# Virtual environment folders
+.venv/
+env/
+venv/
+
+# Streamlit config to disable file watchers (helps with large repos)
+.streamlit/config.toml
