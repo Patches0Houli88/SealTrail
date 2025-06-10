@@ -1,66 +1,78 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+from datetime import datetime
 
-st.title("Maintenance Log")
-# --- Get user role and email ---
+st.set_page_config(page_title="Maintenance Logs", layout="wide")
+st.title("🛠 Maintenance Log")
+
+# --- Session Validation ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
+db_path = st.session_state.get("db_path", None)
+active_table = st.session_state.get("active_table", "equipment")
 
-st.sidebar.markdown(f" Role: {user_role} | Email: {user_email}")
+st.sidebar.markdown(f"Role: {user_role} | Email: {user_email}")
+st.markdown(f"**Linked to Table:** `{active_table}`")
 
-if "user_email" not in st.session_state or "user_role" not in st.session_state:
-    st.error("User not recognized. Please go to the main page and log in again.")
+if not db_path or not os.path.exists(db_path):
+    st.error("No database found. Please load one from the main page.")
     st.stop()
-# Ensure DB
-if "db_path" not in st.session_state:
-    st.warning("No active database. Please upload a file in the main page.")
-    st.stop()
 
-db_path = st.session_state.db_path
-
-# View existing log
+# --- Load Equipment Items for Linking ---
 conn = sqlite3.connect(db_path)
 try:
-    df = pd.read_sql("SELECT * FROM maintenance_log", conn)
-    if not df.empty:
-        st.subheader("Maintenance History")
-        st.dataframe(df)
+    items_df = pd.read_sql(f"SELECT rowid, * FROM {active_table}", conn)
+    item_options = items_df["rowid"].astype(str) + " | " + items_df[items_df.columns[1]].astype(str)
+except Exception as e:
+    st.error(f"Could not load items from `{active_table}`: {e}")
+    item_options = []
 
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
+# --- Display Existing Maintenance Log ---
+try:
+    log_df = pd.read_sql("SELECT * FROM maintenance_log", conn)
+    if not log_df.empty:
+        st.subheader("📜 Maintenance History")
+        st.dataframe(log_df, use_container_width=True)
+        csv = log_df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download Log", csv, "maintenance_log.csv", mime="text/csv")
     else:
-        st.info("No maintenance records yet.")
+        st.info("No maintenance logs yet.")
 except:
-    st.info("Maintenance log not found. Add an entry below to create it.")
+    st.info("No maintenance_log table yet.")
 finally:
     conn.close()
 
-# Add maintenance entry
-st.subheader("Add New Maintenance Record")
-with st.form("maintenance_form"):
-    equipment_id = st.text_input("Equipment ID")
-    description = st.text_area("Work Done / Notes")
-    date = st.date_input("Date Performed")
-    technician = st.text_input("Technician")
-    submitted = st.form_submit_button("Add Record")
+# --- Add New Maintenance Entry ---
+st.subheader("➕ Add Maintenance Record")
+with st.form("add_maintenance"):
+    selected_equipment = st.selectbox("Link to Equipment", item_options, index=0 if item_options else None)
+    description = st.text_area("Description of Work")
+    date_performed = st.date_input("Date Performed", value=datetime.today())
+    technician = st.text_input("Technician Name")
+    submit_log = st.form_submit_button("Save Record")
 
-if submitted and equipment_id and description:
-    conn = sqlite3.connect(db_path)
+if submit_log and selected_equipment and description:
+    equipment_id = selected_equipment.split(" | ")[0]
     try:
+        conn = sqlite3.connect(db_path)
         conn.execute('''CREATE TABLE IF NOT EXISTS maintenance_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             equipment_id TEXT,
             description TEXT,
             date TEXT,
             technician TEXT,
+            table_link TEXT,
             logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
-        conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
-                     (equipment_id, description, str(date), technician))
+        conn.execute('''
+            INSERT INTO maintenance_log (equipment_id, description, date, technician, table_link)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (equipment_id, description, str(date_performed), technician, active_table))
         conn.commit()
-        st.success("Maintenance record added.")
+        st.success("✅ Maintenance record saved.")
     except Exception as e:
-        st.error(f"Error saving record: {e}")
+        st.error(f"Error: {e}")
     finally:
         conn.close()
+        st.rerun()
