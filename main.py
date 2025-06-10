@@ -1,3 +1,6 @@
+# -----------------------------
+# 📄 main.py
+# -----------------------------
 import streamlit as st
 import os
 import pandas as pd
@@ -21,38 +24,33 @@ if st.sidebar.button("Logout"):
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
 
-# --- Load/Create Roles Config ---
+# --- Load/Create Roles ---
 roles_config = {}
 if os.path.exists("roles.yaml"):
     with open("roles.yaml") as f:
         roles_config = yaml.safe_load(f) or {}
-else:
-    roles_config = {}
-
 roles_config.setdefault("users", {})
 
-# Auto-add user if not present
+# Auto-add user if not exists
 if user_email not in roles_config["users"]:
-    roles_config["users"][user_email] = {
-        "role": "user",
-        "allowed_dbs": []
-    }
+    roles_config["users"][user_email] = {"role": "user", "allowed_dbs": []}
     with open("roles.yaml", "w") as f:
         yaml.safe_dump(roles_config, f)
 
 user_role = roles_config["users"][user_email]["role"]
 allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
+
 st.session_state["user_email"] = user_email
 st.session_state["user_role"] = user_role
 
-# --- Sidebar Role + DB Management ---
+# --- Sidebar: Role and DB Management ---
 st.sidebar.write(f"Role: {user_role.capitalize()}")
-db_files = [f for f in os.listdir(user_dir) if f.endswith('.db')]
+db_files = [f for f in os.listdir(user_dir) if f.endswith(".db")]
 if allowed_dbs != ["all"]:
     db_files = [db for db in db_files if db in allowed_dbs]
 
 # --- Create DB ---
-new_db_name = st.sidebar.text_input("Create new database", placeholder="example: laptops.db")
+new_db_name = st.sidebar.text_input("Create new database", placeholder="example: my_inventory.db")
 if st.sidebar.button("Create DB") and new_db_name:
     if not new_db_name.endswith(".db"):
         new_db_name += ".db"
@@ -100,25 +98,8 @@ st.session_state.db_path = db_path
 st.title("Equipment & Inventory Tracking System")
 st.markdown(f"**Current DB**: `{st.session_state.selected_db}`")
 
-# --- Active Table Selection ---
-try:
-    conn = sqlite3.connect(db_path)
-    tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
-    conn.close()
-
-    if tables:
-        active_table = st.selectbox("Select active working table", tables, key="table_selector")
-        st.session_state.active_table = active_table
-        st.markdown(f"**Active Table**: `{active_table}`")
-    else:
-        st.warning("No tables found in the selected database.")
-        st.session_state.active_table = None
-except Exception as e:
-    st.warning(f"Error fetching tables: {e}")
-    st.session_state.active_table = None
-
 # --- Upload Inventory ---
-st.subheader("Upload Inventory File")
+st.subheader("Upload File to Working Table")
 uploaded_file = st.file_uploader("Upload CSV, Excel, JSON or TSV", type=["csv", "xlsx", "xls", "tsv", "json"])
 if uploaded_file:
     try:
@@ -135,54 +116,40 @@ if uploaded_file:
             st.error("Unsupported file type.")
             st.stop()
 
-        # --- Column Mapping ---
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        try:
-            existing_cols = pd.read_sql("SELECT * FROM equipment LIMIT 1", conn).columns.tolist()
-            st.warning("Column mismatch detected. Please map your columns.")
-            col_mapping = {}
-            for col in existing_cols:
-                col_mapping[col] = st.selectbox(f"Map '{col}' to:", df.columns, key=col)
-            df = df.rename(columns=col_mapping)[existing_cols]
-        except:
-            pass
+        # Normalize column names
+        df.columns = df.columns.str.strip()
+        if "Asset_ID" in df.columns and "equipment_id" not in df.columns:
+            df.rename(columns={"Asset_ID": "equipment_id"}, inplace=True)
 
         st.dataframe(df)
 
-        if st.button("Save to DB"):
-            df.to_sql("equipment", conn, if_exists="replace", index=False)
-            conn.commit()
-            st.success("Saved to DB.")
-        conn.close()
+        table_name = st.text_input("Save to which table?", value="equipment")
+        if st.button("Save to DB") and table_name:
+            with sqlite3.connect(db_path) as conn:
+                df.to_sql(table_name, conn, if_exists="replace", index=False)
+            st.session_state.active_table = table_name
+            st.success(f"Saved to '{table_name}' table.")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
 
-# --- Show Current Inventory ---
+# --- Active Table Selection ---
 try:
     with sqlite3.connect(db_path) as conn:
-        existing_df = pd.read_sql("SELECT * FROM equipment", conn)
-        if not existing_df.empty:
-            st.subheader("Current Inventory")
-            st.dataframe(existing_df)
+        tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
+    if tables:
+        active_table = st.selectbox("Select active working table", tables, key="table_selector")
+        st.session_state.active_table = active_table
+        st.markdown(f"**Active Table**: `{active_table}`")
+except Exception as e:
+    st.warning(f"Error fetching tables: {e}")
+
+# --- Show Current Active Table ---
+try:
+    with sqlite3.connect(db_path) as conn:
+        current_df = pd.read_sql(f"SELECT * FROM {st.session_state.active_table}", conn)
+        if not current_df.empty:
+            st.subheader("📋 Current Active Table")
+            st.dataframe(current_df, use_container_width=True)
 except:
-    st.info("No inventory data found.")
-
-# --- Dashboard Summary ---
-st.subheader("📊 Dashboard Summary")
-with sqlite3.connect(db_path) as conn:
-    try:
-        st.metric("Inventory Items", pd.read_sql("SELECT COUNT(*) as count FROM equipment", conn)["count"][0])
-    except:
-        st.metric("Inventory Items", 0)
-
-    try:
-        st.metric("Maintenance Logs", pd.read_sql("SELECT COUNT(*) as count FROM maintenance", conn)["count"][0])
-    except:
-        st.metric("Maintenance Logs", 0)
-
-    try:
-        st.metric("Barcode Scans", pd.read_sql("SELECT COUNT(*) as count FROM scanned_items", conn)["count"][0])
-    except:
-        st.metric("Barcode Scans", 0)
+    st.info("No data found in active table.")
