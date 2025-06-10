@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="Maintenance Log", layout="wide")
 st.title("🛠 Maintenance Log")
 
-# --- Session & Access Checks ---
+# --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
@@ -25,7 +25,7 @@ try:
     df = pd.read_sql("SELECT * FROM maintenance_log", conn)
     if not df.empty:
         st.subheader("🧾 Maintenance History")
-        st.dataframe(df)
+        st.dataframe(df, use_container_width=True)
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
     else:
@@ -37,6 +37,7 @@ finally:
 
 # --- Load Equipment Options ---
 item_options = []
+match_col, name_col = None, None
 try:
     with sqlite3.connect(db_path) as conn:
         df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
@@ -56,14 +57,13 @@ st.subheader("➕ Add Maintenance Record")
 with st.form("maintenance_entry_form"):
     input_mode = st.radio("Select Equipment Input Mode:", ["Dropdown", "Manual Entry"], horizontal=True)
 
+    # Only show one widget at a time, and always get a clean value
     equipment_id = ""
     if input_mode == "Dropdown" and item_options:
-        equipment_id = st.selectbox("Choose Equipment", item_options, key="dropdown_equipment")
-        equipment_id = equipment_id.split(" - ")[0].strip()
-        st.session_state.pop("manual_equipment", None)  # clear manual field
+        selected = st.selectbox("Choose Equipment", item_options, key="dropdown_input")
+        equipment_id = selected.split(" - ")[0].strip()
     elif input_mode == "Manual Entry":
-        equipment_id = st.text_input("Enter Equipment ID", key="manual_equipment")
-        st.session_state.pop("dropdown_equipment", None)  # clear dropdown
+        equipment_id = st.text_input("Enter Equipment ID", key="manual_input")
 
     description = st.text_area("Work Description")
     date_performed = st.date_input("Date Performed", value=datetime.today())
@@ -87,7 +87,7 @@ if submit_log and equipment_id and description:
         conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
                      (equipment_id, description, str(date_performed), technician))
 
-        # --- Update equipment's last maintenance date ---
+        # Optional: Update last_maintenance_date
         df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
         id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
         if id_col:
