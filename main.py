@@ -41,6 +41,7 @@ allowed_dbs = roles_config["users"][user_email]["allowed_dbs"]
 
 st.session_state["user_email"] = user_email
 st.session_state["user_role"] = roles_config["users"][user_email]["role"]
+
 # --- User Directory ---
 user_dir = f"data/{user_email.replace('@', '_at_')}"
 os.makedirs(user_dir, exist_ok=True)
