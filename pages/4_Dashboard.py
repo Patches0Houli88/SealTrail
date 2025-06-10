@@ -11,7 +11,7 @@ import yaml
 
 # --- Page Setup ---
 st.set_page_config(page_title="Custom Dashboard", layout="wide")
-st.title("📊 Equipment Dashboard")
+st.title("Equipment Dashboard")
 
 # --- Get User Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
@@ -25,7 +25,11 @@ if not db_path or not os.path.exists(db_path):
     st.stop()
 
 # --- Get Active Table Name ---
-active_table = st.session_state.get("active_table", "equipment")
+active_table = st.session_state.get("active_table")
+if not active_table:
+    st.error("No active table selected. Please go to the main page and select a table.")
+    st.stop()
+
 st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
 conn = sqlite3.connect(db_path)
@@ -34,14 +38,20 @@ conn = sqlite3.connect(db_path)
 def load_table(name):
     try:
         return pd.read_sql_query(f"SELECT * FROM {name}", conn)
-    except:
+    except Exception as e:
+        st.warning(f"Could not load table `{name}`: {e}")
         return pd.DataFrame()
-
 equipment_df = load_table(active_table)
 maintenance_df = load_table("maintenance")
 scans_df = load_table("scanned_items")
 
 conn.close()
+
+st.subheader("📋 Active Table Preview")
+if equipment_df.empty:
+    st.info(f"No data found in `{active_table}`.")
+else:
+    st.dataframe(equipment_df.head())
 
 # --- PDF Export Function ---
 def export_to_pdf():
