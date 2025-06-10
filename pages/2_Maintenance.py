@@ -38,8 +38,18 @@ except:
     st.info("Maintenance log not found. Add an entry below to create it.")
 finally:
     conn.close()
-
-# --- Add New Record ---
+item_options = []
+try:
+    with sqlite3.connect(db_path) as conn:
+        df_equipment = pd.read_sql("SELECT * FROM equipment", conn)
+        if "Asset_ID" in df_equipment.columns:
+            if "name" in df_equipment.columns:
+                item_options = df_equipment["Asset_ID"].astype(str) + " - " + df_equipment["name"].astype(str)
+            else:
+                item_options = df_equipment["Asset_ID"].astype(str)
+            item_options = item_options.tolist()
+except Exception as e:
+    st.warning(f"Could not load equipment: {e}")
 with st.form("add_maintenance"):
     st.markdown("### 🛠 Add Maintenance Record")
 
