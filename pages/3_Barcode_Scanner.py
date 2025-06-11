@@ -22,7 +22,16 @@ st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
 if not db_path or not os.path.exists(db_path):
     st.error("No database loaded. Please return to the main page.")
     st.stop()
+# Whenever you load equipment_df
+equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
+if "equipment_id" in equipment_df.columns:
+    equipment_df["equipment_id"] = equipment_df["equipment_id"].astype(str).str.strip()
 
+# Same for maintenance_df if relevant:
+maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
+if "equipment_id" in maintenance_df.columns:
+    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
+    
 # --- Table Selection ---
 conn = sqlite3.connect(db_path)
 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
