@@ -19,15 +19,6 @@ if "db_path" not in st.session_state:
 db_path = st.session_state.db_path
 active_table = st.session_state.get("active_table", "equipment")
 
-# Whenever you load equipment_df
-equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
-if "equipment_id" in equipment_df.columns:
-    equipment_df["equipment_id"] = equipment_df["equipment_id"].astype(str).str.strip()
-
-# Same for maintenance_df if relevant:
-maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
-if "equipment_id" in maintenance_df.columns:
-    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
 # --- Load and Display Maintenance Log ---
 conn = sqlite3.connect(db_path)
 try:
@@ -44,19 +35,16 @@ except:
 finally:
     conn.close()
 
-# --- Load Equipment Options ---
+# --- Load Equipment Options (Normalize to equipment_id everywhere) ---
 item_options = []
-match_col, name_col = None, None
 try:
     with sqlite3.connect(db_path) as conn:
         df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
-        match_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
-        name_col = next((col for col in df_equipment.columns if col.lower() == "name"), None)
-        if match_col:
-            if name_col:
-                item_options = (df_equipment[match_col].astype(str) + " - " + df_equipment[name_col].astype(str)).tolist()
-            else:
-                item_options = df_equipment[match_col].astype(str).tolist()
+        df_equipment["equipment_id"] = df_equipment.get("equipment_id", df_equipment.get("Asset_ID", "")).astype(str).str.strip()
+        df_equipment["display"] = df_equipment["equipment_id"]
+        if "name" in df_equipment.columns:
+            df_equipment["display"] += " - " + df_equipment["name"].astype(str)
+        item_options = df_equipment["display"].tolist()
 except Exception as e:
     st.warning(f"⚠️ Could not load equipment: {e}")
 
@@ -67,15 +55,12 @@ with st.form("maintenance_entry_form"):
     input_mode = st.radio("Select Equipment Input Mode:", ["Dropdown", "Manual Entry"], horizontal=True)
 
     equipment_id = ""
-    manual_id = ""
     if input_mode == "Dropdown" and item_options:
-        selected = st.selectbox("Choose Equipment", item_options, key="dropdown_input")
-        equipment_id = selected.split(" - ")[0].strip()
+        selected_equipment = st.selectbox("Choose Equipment", item_options)
+        equipment_id = selected_equipment.split(" - ")[0].strip()
     elif input_mode == "Manual Entry":
-        manual_id = st.text_input("Enter Equipment ID", key="manual_input")
-        equipment_id = manual_id.strip()
+        equipment_id = st.text_input("Enter Equipment ID Manually").strip()
 
-    location = st.text_input("Location (Room, Site, or Zone)")
     description = st.text_area("Work Description")
     date_performed = st.date_input("Date Performed", value=datetime.today())
     technician = st.text_input("Technician Name")
@@ -85,8 +70,6 @@ with st.form("maintenance_entry_form"):
 if submit_log and equipment_id and description:
     try:
         conn = sqlite3.connect(db_path)
-
-        # --- Ensure Columns Exist ---
         conn.execute("""
             CREATE TABLE IF NOT EXISTS maintenance_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,18 +77,13 @@ if submit_log and equipment_id and description:
                 description TEXT,
                 date TEXT,
                 technician TEXT,
-                location TEXT,
                 logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
+                     (equipment_id, description, str(date_performed), technician))
 
-        # Insert record
-        conn.execute("""
-            INSERT INTO maintenance_log (equipment_id, description, date, technician, location)
-            VALUES (?, ?, ?, ?, ?)
-        """, (equipment_id, description, str(date_performed), technician, location))
-
-        # Optional: Update last_maintenance_date in inventory
+        # Auto update last_maintenance_date in active table
         df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
         id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
         if id_col:
