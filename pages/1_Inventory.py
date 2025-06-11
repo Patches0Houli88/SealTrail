@@ -24,6 +24,16 @@ if not db_path or not os.path.exists(db_path):
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
+# --- Ensure Location column exists ---
+try:
+    cursor.execute(f"PRAGMA table_info({active_table})")
+    existing_cols = [row[1].lower() for row in cursor.fetchall()]
+    if "location" not in existing_cols:
+        cursor.execute(f"ALTER TABLE {active_table} ADD COLUMN Location TEXT")
+        conn.commit()
+except Exception as e:
+    st.warning(f"Could not ensure Location column exists: {e}")
+
 # --- Load Data ---
 def load_data():
     try:
@@ -139,4 +149,5 @@ else:
                 st.warning("⚠️ Please select one row to set as a template.")
             else:
                 st.warning("⚠️ Please select only one row.")
+
 conn.close()
