@@ -24,34 +24,18 @@ if not db_path or not os.path.exists(db_path):
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
-# --- Ensure Location column exists ---
-try:
-    cursor.execute(f"PRAGMA table_info({active_table})")
-    existing_cols = [row[1].lower() for row in cursor.fetchall()]
-    if "location" not in existing_cols:
-        cursor.execute(f"ALTER TABLE {active_table} ADD COLUMN Location TEXT")
-        conn.commit()
-except Exception as e:
-    st.warning(f"Could not ensure Location column exists: {e}")
-
 # --- Load Data ---
 def load_data():
     try:
-        return pd.read_sql(f"SELECT rowid, * FROM {active_table}", conn)
+        df = pd.read_sql(f"SELECT rowid, * FROM {active_table}", conn)
+        if "equipment_id" in df.columns:
+            df["equipment_id"] = df["equipment_id"].astype(str).str.strip()
+        return df
     except:
         return pd.DataFrame()
 
 df = load_data()
-# Whenever you load equipment_df
-equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
-if "equipment_id" in equipment_df.columns:
-    equipment_df["equipment_id"] = equipment_df["equipment_id"].astype(str).str.strip()
 
-# Same for maintenance_df if relevant:
-maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
-if "equipment_id" in maintenance_df.columns:
-    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
-    
 # --- Template File ---
 template_file = "templates.yaml"
 if os.path.exists(template_file):
@@ -158,5 +142,4 @@ else:
                 st.warning("⚠️ Please select one row to set as a template.")
             else:
                 st.warning("⚠️ Please select only one row.")
-
 conn.close()
