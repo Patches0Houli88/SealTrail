@@ -34,3 +34,7 @@ venv/
 
 # Streamlit config to disable file watchers (helps with large repos)
 .streamlit/config.toml
+
+# Ignore settings files
+settings_*.yaml
+data/settings_*.yaml
