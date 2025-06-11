@@ -57,14 +57,16 @@ st.subheader("➕ Add Maintenance Record")
 with st.form("maintenance_entry_form"):
     input_mode = st.radio("Select Equipment Input Mode:", ["Dropdown", "Manual Entry"], horizontal=True)
 
-    # Only show one widget at a time, and always get a clean value
     equipment_id = ""
+    manual_id = ""
     if input_mode == "Dropdown" and item_options:
         selected = st.selectbox("Choose Equipment", item_options, key="dropdown_input")
         equipment_id = selected.split(" - ")[0].strip()
     elif input_mode == "Manual Entry":
-        equipment_id = st.text_input("Enter Equipment ID", key="manual_input")
+        manual_id = st.text_input("Enter Equipment ID", key="manual_input")
+        equipment_id = manual_id.strip()
 
+    location = st.text_input("Location (Room, Site, or Zone)")
     description = st.text_area("Work Description")
     date_performed = st.date_input("Date Performed", value=datetime.today())
     technician = st.text_input("Technician Name")
@@ -74,6 +76,8 @@ with st.form("maintenance_entry_form"):
 if submit_log and equipment_id and description:
     try:
         conn = sqlite3.connect(db_path)
+
+        # --- Ensure Columns Exist ---
         conn.execute("""
             CREATE TABLE IF NOT EXISTS maintenance_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,13 +85,18 @@ if submit_log and equipment_id and description:
                 description TEXT,
                 date TEXT,
                 technician TEXT,
+                location TEXT,
                 logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
-                     (equipment_id, description, str(date_performed), technician))
 
-        # Optional: Update last_maintenance_date
+        # Insert record
+        conn.execute("""
+            INSERT INTO maintenance_log (equipment_id, description, date, technician, location)
+            VALUES (?, ?, ?, ?, ?)
+        """, (equipment_id, description, str(date_performed), technician, location))
+
+        # Optional: Update last_maintenance_date in inventory
         df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
         id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
         if id_col:
