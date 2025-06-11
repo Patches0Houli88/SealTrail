@@ -17,21 +17,15 @@ st.title("📷 Scan & Track Equipment")
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 db_path = st.session_state.get("db_path")
+active_table = st.session_state.get("active_table", "equipment")
+
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
 if not db_path or not os.path.exists(db_path):
     st.error("No database loaded. Please return to the main page.")
     st.stop()
-# Whenever you load equipment_df
-equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
-if "equipment_id" in equipment_df.columns:
-    equipment_df["equipment_id"] = equipment_df["equipment_id"].astype(str).str.strip()
 
-# Same for maintenance_df if relevant:
-maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
-if "equipment_id" in maintenance_df.columns:
-    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
-    
 # --- Table Selection ---
 conn = sqlite3.connect(db_path)
 tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
@@ -54,6 +48,17 @@ conn.execute("""
 conn.commit()
 conn.close()
 
+# --- Load Equipment for matching ---
+conn = sqlite3.connect(db_path)
+try:
+    df_equipment = pd.read_sql(f"SELECT * FROM {target_table}", conn)
+    id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+    df_equipment["equipment_id"] = df_equipment[id_col].astype(str).str.strip()
+except Exception as e:
+    st.warning(f"Could not load active table: {e}")
+finally:
+    conn.close()
+
 # --- Scanner UI ---
 st.markdown("### 🔍 Scanner Status")
 camera_active = st.checkbox("🟢 Start Scanner")
@@ -64,31 +69,14 @@ st.markdown("### 🏷️ Scan or Enter Equipment ID")
 equipment_id = st.text_input("Equipment ID (barcode or manual entry)", placeholder="e.g., EQP-001").strip()
 location = st.text_input("Location (optional)", placeholder="e.g., Warehouse A").strip()
 
-# --- Load Record if Exists ---
-record, table_columns, matching_col = None, [], None
-if equipment_id and target_table:
-    conn = sqlite3.connect(db_path)
-    try:
-        df = pd.read_sql(f"SELECT * FROM {target_table}", conn)
-        table_columns = df.columns.tolist()
-        matching_col = next((col for col in df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
-        if matching_col:
-            record_df = df[df[matching_col].astype(str).str.lower() == equipment_id.lower()]
-            if not record_df.empty:
-                record = record_df.iloc[0].to_dict()
-    except Exception as e:
-        st.error(f"Error loading table: {e}")
-    finally:
-        conn.close()
-
-# --- QR Preview ---
+# --- QR Code Preview ---
 if equipment_id:
     qr = qrcode.make(equipment_id)
     buf = io.BytesIO()
     qr.save(buf)
     st.image(buf.getvalue(), caption="QR Code", width=150)
 
-# --- Batch QR Mode ---
+# --- QR Batch Mode ---
 with st.expander("📦 Generate QR Batch"):
     prefix = st.text_input("Prefix", value="EQP")
     start = st.number_input("Start Number", min_value=1, value=1)
@@ -104,30 +92,43 @@ with st.expander("📦 Generate QR Batch"):
                 zf.writestr(f"{id_code}.png", img_buf.getvalue())
         st.download_button("⬇️ Download QR ZIP", qr_zip.getvalue(), "qr_batch.zip")
 
-# --- Edit/Add Record ---
+# --- Load existing record ---
+record = None
+if equipment_id and not df_equipment.empty:
+    match_row = df_equipment[df_equipment["equipment_id"].str.lower() == equipment_id.lower()]
+    if not match_row.empty:
+        record = match_row.iloc[0].to_dict()
+
+# --- Edit/Add Form ---
 if equipment_id:
     st.markdown("### ✏️ Edit or Add Entry")
     with st.form("update_form"):
         updated = {}
-        for col in table_columns:
-            if col.lower() in ["id", "rowid", "timestamp"]:
+        for col in df_equipment.columns:
+            if col.lower() in ["id", "rowid", "equipment_id", "asset_id"]:
                 continue
-            default = record[col] if record and col in record else ""
-            updated[col] = st.text_input(col, value=default)
+            default_val = record[col] if record else ""
+            updated[col] = st.text_input(col, value=str(default_val))
 
         submit = st.form_submit_button("✅ Save Entry")
 
     if submit:
         conn = sqlite3.connect(db_path)
         try:
-            if record and matching_col:
-                clause = ", ".join([f"{k}=?" for k in updated])
-                conn.execute(f"UPDATE {target_table} SET {clause} WHERE {matching_col} = ?", list(updated.values()) + [equipment_id])
+            if record is not None:
+                clause = ", ".join([f"{k}=?" for k in updated.keys()])
+                conn.execute(
+                    f"UPDATE {target_table} SET {clause} WHERE LOWER({id_col}) = LOWER(?)",
+                    list(updated.values()) + [equipment_id]
+                )
                 st.success("Record updated.")
             else:
-                cols = ", ".join(updated.keys())
-                placeholders = ", ".join(["?" for _ in updated])
-                conn.execute(f"INSERT INTO {target_table} ({cols}) VALUES ({placeholders})", list(updated.values()))
+                columns = f"{id_col}, " + ", ".join(updated.keys())
+                placeholders = ", ".join(["?"] * (len(updated) + 1))
+                conn.execute(
+                    f"INSERT INTO {target_table} ({columns}) VALUES ({placeholders})",
+                    [equipment_id] + list(updated.values())
+                )
                 st.success("New record added.")
 
             conn.execute("INSERT INTO scanned_items (equipment_id, location, timestamp, scanned_by) VALUES (?, ?, ?, ?)",
@@ -159,8 +160,8 @@ if equipment_id:
             finally:
                 conn.close()
 
-# --- Scan Log Analysis ---
-st.markdown("### 📋 Scan Log & Analysis")
+# --- Scan Log ---
+st.markdown("### 📋 Scan Log & Analytics")
 with sqlite3.connect(db_path) as conn:
     scan_df = pd.read_sql("SELECT * FROM scanned_items ORDER BY timestamp DESC", conn)
 
@@ -175,11 +176,7 @@ if filter_date:
 if filter_id:
     filtered = filtered[filtered["equipment_id"].str.contains(filter_id, case=False, na=False)]
 
-# --- Colored Recent Table ---
-def color_rows(row):
-    return ['background-color: lightyellow' if i % 2 == 0 else '' for i in range(len(row))]
-
-st.dataframe(filtered.style.apply(color_rows, axis=1), use_container_width=True)
+st.dataframe(filtered, use_container_width=True)
 
 # --- Scan Trend Chart ---
 if not scan_df.empty:
@@ -191,31 +188,13 @@ if not scan_df.empty:
     ).properties(title="📈 Scans Over Time")
     st.altair_chart(chart, use_container_width=True)
 
-# --- Group by Location or User ---
-with st.expander("📊 Grouped Summary"):
+# --- Group Summary ---
+with st.expander("📊 Group Summary"):
     by = st.selectbox("Group scans by:", ["scanned_by", "location"])
     summary = scan_df.groupby(by).size().reset_index(name="count")
     st.bar_chart(summary.set_index(by))
 
-# --- Export & Email Options ---
-with st.expander("📤 Export or Email"):
+# --- Export ---
+with st.expander("📤 Export Logs"):
     csv_data = scan_df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", csv_data, "scans.csv", mime="text/csv")
-
-    email_to = st.text_input("Email To")
-    if st.button("✉️ Email Logs") and email_to:
-        try:
-            msg = EmailMessage()
-            msg["Subject"] = "Scan Logs Export"
-            msg["From"] = "youremail@example.com"
-            msg["To"] = email_to
-            msg.set_content("Attached are the scan logs.")
-            msg.add_attachment(csv_data, maintype="text", subtype="csv", filename="scans.csv")
-
-            with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
-                smtp.starttls()
-                smtp.login("youremail@example.com", "yourpassword")
-                smtp.send_message(msg)
-            st.success("Email sent!")
-        except Exception as e:
-            st.error(f"Failed to send email: {e}")
