@@ -19,6 +19,15 @@ if "db_path" not in st.session_state:
 db_path = st.session_state.db_path
 active_table = st.session_state.get("active_table", "equipment")
 
+# Whenever you load equipment_df
+equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
+if "equipment_id" in equipment_df.columns:
+    equipment_df["equipment_id"] = equipment_df["equipment_id"].astype(str).str.strip()
+
+# Same for maintenance_df if relevant:
+maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
+if "equipment_id" in maintenance_df.columns:
+    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
 # --- Load and Display Maintenance Log ---
 conn = sqlite3.connect(db_path)
 try:
