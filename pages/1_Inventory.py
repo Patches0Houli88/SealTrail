@@ -42,7 +42,16 @@ def load_data():
         return pd.DataFrame()
 
 df = load_data()
+# Whenever you load equipment_df
+equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
+if "equipment_id" in equipment_df.columns:
+    equipment_df["equipment_id"] = equipment_df["equipment_id"].astype(str).str.strip()
 
+# Same for maintenance_df if relevant:
+maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
+if "equipment_id" in maintenance_df.columns:
+    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
+    
 # --- Template File ---
 template_file = "templates.yaml"
 if os.path.exists(template_file):
