@@ -10,14 +10,13 @@ st.title("Predictive Maintenance Engine")
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-
 db_path = su.get_db_path()
 active_table = su.get_active_table()
 
-st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.markdown(f"Role: {user_role} | 📧 Email: {user_email}")
 st.sidebar.info(f"Active Table: `{active_table}`")
 
-# --- Load data centrally ---
+# --- Load Data using centralized shared_utils ---
 equipment_df = su.load_equipment()
 maintenance_df = su.load_maintenance()
 
@@ -25,12 +24,12 @@ maintenance_df = su.load_maintenance()
 settings = su.load_settings_yaml()
 table_settings = settings.get(active_table, {})
 
-# --- Normalize ID columns ---
+# --- Normalize columns ---
 id_col = su.get_id_column(equipment_df)
 type_col = su.get_type_column(equipment_df)
 
 if id_col is None:
-    st.error("No equipment_id column found.")
+    st.error("No equipment ID column found.")
     st.stop()
 
 # --- Predictive Logic ---
@@ -40,23 +39,17 @@ for _, row in equipment_df.iterrows():
     equip_id = row[id_col]
     equip_type = str(row.get(type_col, "")).strip()
 
-    # Maintenance history for this equipment
-    history = maintenance_df.loc[maintenance_df["equipment_id"] == equip_id].sort_values("date")
-    history = history.dropna(subset=["date"])
+    # Historical maintenance lookup
+    history = maintenance_df[maintenance_df["equipment_id"] == equip_id].sort_values("date").dropna(subset=["date"])
 
-    # Historical learning (optional - avg interval from actual history)
-    if len(history) >= 2:
-        intervals = history["date"].diff().dt.days[1:]
-        avg_interval = int(intervals.mean())
-    else:
-        avg_interval = None
+    # Calculate average interval from history
+    avg_interval = int(history["date"].diff().dt.days[1:].mean()) if len(history) >= 2 else None
 
-    # Use YAML setting if exists
+    # Use user-defined interval or default to 90
     interval_setting = table_settings.get(equip_type, 90)
-
     last_maint = history["date"].max() if not history.empty else None
 
-    # Predictive next due:
+    # Predictive next due calculation
     if pd.notna(last_maint):
         predicted_next = last_maint + timedelta(days=interval_setting)
         days_remaining = (predicted_next - datetime.today()).days
@@ -68,9 +61,7 @@ for _, row in equipment_df.iterrows():
         else:
             status = "🟢 On Schedule"
     else:
-        predicted_next = None
-        days_remaining = None
-        status = "⚪ Never Serviced"
+        predicted_next, days_remaining, status = None, None, "⚪ Never Serviced"
 
     results.append({
         "Equipment ID": equip_id,
@@ -83,9 +74,9 @@ for _, row in equipment_df.iterrows():
         "Predicted Status": status
     })
 
-# --- Display Results ---
+# --- Display ---
 result_df = pd.DataFrame(results)
-st.subheader("Predictive Maintenance Table")
+st.subheader("📊 Predictive Maintenance Table")
 st.dataframe(result_df, use_container_width=True)
 
 # --- Filters ---
@@ -93,13 +84,9 @@ st.sidebar.subheader("Filter by Status")
 status_filter = st.sidebar.selectbox("Status", ["All", "Overdue", "Due Soon", "On Schedule", "Never Serviced"])
 
 if status_filter != "All":
-    emoji_map = {
-        "Overdue": "🔴",
-        "Due Soon": "🟠",
-        "On Schedule": "🟢",
-        "Never Serviced": "⚪"
-    }
-    filtered_df = result_df[result_df["Predicted Status"].str.startswith(emoji_map[status_filter])]
+    emoji = {"Overdue": "🔴", "Due Soon": "🟠", "On Schedule": "🟢", "Never Serviced": "⚪"}[status_filter]
+    filtered_df = result_df[result_df["Predicted Status"].str.startswith(emoji)]
     st.dataframe(filtered_df, use_container_width=True)
 
-su.log_audit(db_path, user_email, "Run Predictive Maintenance", f"Generated predictions for {len(result_df)} records")
+# ✅ Log audit entry
+su.log_audit("Viewed Predictive Maintenance")
