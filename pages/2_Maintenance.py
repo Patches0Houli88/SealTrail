@@ -12,15 +12,11 @@ user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
 
-if "db_path" not in st.session_state:
-    st.error("No active database found. Please select or upload one in the main page.")
-    st.stop()
-
-db_path = st.session_state.db_path
-active_table = st.session_state.get("active_table", "equipment")
+db_path = su.get_db_path()
+active_table = su.get_active_table()
 
 # --- Load Maintenance Log ---
-df = su.load_table(db_path, "maintenance_log")
+df = su.load_table("maintenance_log")
 if not df.empty:
     st.subheader("🧾 Maintenance History")
     st.dataframe(df, use_container_width=True)
@@ -32,7 +28,7 @@ else:
 # --- Load Equipment Options ---
 item_options = []
 try:
-    df_equipment = su.load_table(db_path, active_table)
+    df_equipment = su.load_equipment()
     if not df_equipment.empty:
         df_equipment["equipment_id"] = df_equipment.get("equipment_id", df_equipment.get("Asset_ID", "")).astype(str).str.strip()
         df_equipment["display"] = df_equipment["equipment_id"]
@@ -63,7 +59,7 @@ with st.form("maintenance_entry_form"):
 
 if submit_log and equipment_id and description:
     try:
-        with su.get_conn(db_path) as conn:
+        with su.load_connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS maintenance_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +87,9 @@ if submit_log and equipment_id and description:
                     WHERE LOWER({id_col}) = LOWER(?)
                 """, (str(date_performed), equipment_id))
 
+            su.log_audit(db_path, user_email, "Add Maintenance", f"Added maintenance for {equipment_id}")
             conn.commit()
-            st.success("✅ Maintenance record added.")
+
+        st.success("✅ Maintenance record added.")
     except Exception as e:
         st.error(f"❌ Error saving record: {e}")
