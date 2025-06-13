@@ -1,8 +1,8 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import os
 from datetime import datetime
+import shared_utils as su
 
 st.set_page_config(page_title="Maintenance Log", layout="wide")
 st.title("🛠 Maintenance Log")
@@ -19,27 +19,21 @@ if "db_path" not in st.session_state:
 db_path = st.session_state.db_path
 active_table = st.session_state.get("active_table", "equipment")
 
-# --- Load and Display Maintenance Log ---
-conn = sqlite3.connect(db_path)
-try:
-    df = pd.read_sql("SELECT * FROM maintenance_log", conn)
-    if not df.empty:
-        st.subheader("🧾 Maintenance History")
-        st.dataframe(df, use_container_width=True)
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
-    else:
-        st.info("No maintenance records yet.")
-except:
-    st.info("Maintenance log not found. Add a record below to start it.")
-finally:
-    conn.close()
+# --- Load Maintenance Log ---
+df = su.load_table(db_path, "maintenance_log")
+if not df.empty:
+    st.subheader("🧾 Maintenance History")
+    st.dataframe(df, use_container_width=True)
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
+else:
+    st.info("No maintenance records yet.")
 
-# --- Load Equipment Options (Normalize to equipment_id everywhere) ---
+# --- Load Equipment Options ---
 item_options = []
 try:
-    with sqlite3.connect(db_path) as conn:
-        df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
+    df_equipment = su.load_table(db_path, active_table)
+    if not df_equipment.empty:
         df_equipment["equipment_id"] = df_equipment.get("equipment_id", df_equipment.get("Asset_ID", "")).astype(str).str.strip()
         df_equipment["display"] = df_equipment["equipment_id"]
         if "name" in df_equipment.columns:
@@ -69,35 +63,35 @@ with st.form("maintenance_entry_form"):
 
 if submit_log and equipment_id and description:
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS maintenance_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                equipment_id TEXT,
-                description TEXT,
-                date TEXT,
-                technician TEXT,
-                logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
-                     (equipment_id, description, str(date_performed), technician))
+        with su.get_conn(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS maintenance_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    equipment_id TEXT,
+                    description TEXT,
+                    date TEXT,
+                    technician TEXT,
+                    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                INSERT INTO maintenance_log (equipment_id, description, date, technician) 
+                VALUES (?, ?, ?, ?)
+            """, (equipment_id, description, str(date_performed), technician))
 
-        # Auto update last_maintenance_date in active table
-        df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
-        id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
-        if id_col:
-            if "last_maintenance_date" not in df_equipment.columns:
-                conn.execute(f"ALTER TABLE {active_table} ADD COLUMN last_maintenance_date TEXT")
-            conn.execute(f"""
-                UPDATE {active_table}
-                SET last_maintenance_date = ?
-                WHERE LOWER({id_col}) = LOWER(?)
-            """, (str(date_performed), equipment_id))
+            # Auto update last_maintenance_date
+            df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
+            id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+            if id_col:
+                if "last_maintenance_date" not in df_equipment.columns:
+                    conn.execute(f"ALTER TABLE {active_table} ADD COLUMN last_maintenance_date TEXT")
+                conn.execute(f"""
+                    UPDATE {active_table}
+                    SET last_maintenance_date = ?
+                    WHERE LOWER({id_col}) = LOWER(?)
+                """, (str(date_performed), equipment_id))
 
-        conn.commit()
-        st.success("✅ Maintenance record added.")
+            conn.commit()
+            st.success("✅ Maintenance record added.")
     except Exception as e:
         st.error(f"❌ Error saving record: {e}")
-    finally:
-        conn.close()
