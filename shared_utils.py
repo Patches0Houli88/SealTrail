@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import yaml
 from datetime import datetime
+import streamlit as st  # important to import because we're using st inside utils
 
 ### --- SESSION SAFE GETTERS ---
 def get_db_path():
@@ -72,32 +73,23 @@ def save_settings_yaml(settings):
     with open(file, "w") as f:
         yaml.safe_dump(settings, f)
 
-### --- AUDIT LOGGER (NEW) ---
-def log_audit(db_path, user_email, action, detail):
-    """
-    Logs any user action to audit_log table.
-    """
-    if not os.path.exists(db_path):
-        return
+### --- AUDIT LOG WRITER ---
+def log_audit(action, user, detail=""):
+    db_path = get_db_path()
+    timestamp = datetime.utcnow().isoformat()
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            user_email TEXT,
-            action TEXT,
-            detail TEXT
+    with load_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                action TEXT,
+                user TEXT,
+                detail TEXT
+            )
+        """)
+        conn.execute(
+            "INSERT INTO audit_log (timestamp, action, user, detail) VALUES (?, ?, ?, ?)",
+            (timestamp, action, user, detail)
         )
-    """)
-
-    timestamp = datetime.now().isoformat()
-    cursor.execute("""
-        INSERT INTO audit_log (timestamp, user_email, action, detail)
-        VALUES (?, ?, ?, ?)
-    """, (timestamp, user_email, action, detail))
-
-    conn.commit()
-    conn.close()
+        conn.commit()
