@@ -1,9 +1,7 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime
-import os
-import shared_utils as utils
+import shared_utils as su
 
 st.set_page_config(page_title="Audit Log", layout="wide")
 st.title("System Audit Log")
@@ -11,31 +9,31 @@ st.title("System Audit Log")
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-db_path = utils.get_db_path()
+db_path = su.get_db_path()
 
-st.sidebar.markdown(f"Role: {user_role}  \n Email: {user_email}")
-st.sidebar.info(f"Database: `{db_path}`")
+st.sidebar.markdown(f"Role: {user_role} | 📧 {user_email}")
+st.sidebar.info(f"Active DB: `{db_path}`")
 
+# --- Permissions ---
 if user_role != "admin":
     st.warning("You do not have permission to access audit logs.")
     st.stop()
 
 # --- Ensure audit_log table exists ---
-conn = utils.load_connection()
-conn.execute("""
-CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT,
-    action TEXT,
-    user TEXT,
-    detail TEXT
-)
-""")
-conn.commit()
-conn.close()
+with su.get_conn(db_path) as conn:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            action TEXT,
+            user TEXT,
+            detail TEXT
+        )
+    """)
+    conn.commit()
 
-# --- Load Audit Log ---
-log_df = utils.load_table("audit_log")
+# --- Load Log ---
+log_df = su.load_table("audit_log")
 
 if log_df.empty:
     st.info("No audit log entries found.")
@@ -45,12 +43,12 @@ else:
 
     st.dataframe(log_df, use_container_width=True)
 
-    # Optional filters
-    with st.expander("🔎 Filter Logs"):
-        user_filter = st.selectbox("Filter by User", ["All"] + sorted(log_df["user"].dropna().unique().tolist()))
-        action_filter = st.selectbox("Filter by Action", ["All"] + sorted(log_df["action"].dropna().unique().tolist()))
-        start_date = st.date_input("Start Date", value=datetime.today().replace(day=1))
-        end_date = st.date_input("End Date", value=datetime.today())
+    # --- Filter Options ---
+    with st.expander("Filter Logs"):
+        user_filter = st.selectbox("User", ["All"] + sorted(log_df["user"].dropna().unique().tolist()))
+        action_filter = st.selectbox("Action", ["All"] + sorted(log_df["action"].dropna().unique().tolist()))
+        start_date = st.date_input("Start Date", datetime.today().replace(day=1))
+        end_date = st.date_input("End Date", datetime.today())
 
         filtered = log_df.copy()
 
