@@ -1,64 +1,50 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
-import yaml
 import os
 from datetime import datetime, timedelta
+import shared_utils as su
 
 st.set_page_config(page_title="Predictive Maintenance", layout="wide")
-st.title("🧠 Predictive Maintenance Engine")
+st.title("Predictive Maintenance Engine")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-db_path = st.session_state.get("db_path", None)
-active_table = st.session_state.get("active_table", "equipment")
 
-st.sidebar.markdown(f"🔐 Role: {user_role} | 📧 Email: {user_email}")
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
+db_path = su.get_db_path()
+active_table = su.get_active_table()
 
-if not db_path or not os.path.exists(db_path):
-    st.error("No active database found. Please go to main page.")
-    st.stop()
+st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.info(f"Active Table: `{active_table}`")
 
-# --- Load Equipment + Maintenance ---
-conn = sqlite3.connect(db_path)
-equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
-maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
-conn.close()
+# --- Load data centrally ---
+equipment_df = su.load_equipment()
+maintenance_df = su.load_maintenance()
 
-# Normalize ID columns
-id_col = next((c for c in equipment_df.columns if c.lower() in ["asset_id", "equipment_id"]), None)
-if not id_col:
+# --- Load YAML settings ---
+settings = su.load_settings_yaml()
+table_settings = settings.get(active_table, {})
+
+# --- Normalize ID columns ---
+id_col = su.get_id_column(equipment_df)
+type_col = su.get_type_column(equipment_df)
+
+if id_col is None:
     st.error("No equipment_id column found.")
     st.stop()
 
-equipment_df[id_col] = equipment_df[id_col].astype(str).str.strip()
-maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
-maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
-
-# Load Settings YAML
-settings_file = "maintenance_settings.yaml"
-if os.path.exists(settings_file):
-    with open(settings_file, "r") as f:
-        settings = yaml.safe_load(f) or {}
-else:
-    settings = {}
-
-type_col = next((c for c in equipment_df.columns if c.lower() in ["equipment_type", "type"]), None)
-settings_for_table = settings.get(active_table, {})
-
-# --- Build Prediction Table ---
+# --- Predictive Logic ---
 results = []
 
 for _, row in equipment_df.iterrows():
     equip_id = row[id_col]
     equip_type = str(row.get(type_col, "")).strip()
 
+    # Maintenance history for this equipment
     history = maintenance_df.loc[maintenance_df["equipment_id"] == equip_id].sort_values("date")
     history = history.dropna(subset=["date"])
 
-    # Historical learning (optional)
+    # Historical learning (optional - avg interval from actual history)
     if len(history) >= 2:
         intervals = history["date"].diff().dt.days[1:]
         avg_interval = int(intervals.mean())
@@ -66,7 +52,7 @@ for _, row in equipment_df.iterrows():
         avg_interval = None
 
     # Use YAML setting if exists
-    interval_setting = settings_for_table.get(equip_type, 90)
+    interval_setting = table_settings.get(equip_type, 90)
 
     last_maint = history["date"].max() if not history.empty else None
 
@@ -97,13 +83,13 @@ for _, row in equipment_df.iterrows():
         "Predicted Status": status
     })
 
-# --- Display Table ---
+# --- Display Results ---
 result_df = pd.DataFrame(results)
-st.subheader("📊 Predictive Maintenance Table")
+st.subheader("Predictive Maintenance Table")
 st.dataframe(result_df, use_container_width=True)
 
 # --- Filters ---
-st.sidebar.subheader("🔎 Filter by Status")
+st.sidebar.subheader("Filter by Status")
 status_filter = st.sidebar.selectbox("Status", ["All", "Overdue", "Due Soon", "On Schedule", "Never Serviced"])
 
 if status_filter != "All":
