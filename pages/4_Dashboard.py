@@ -1,13 +1,10 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import altair as alt
 import os
 from datetime import datetime, timedelta
 import yaml
-from fpdf import FPDF
-import smtplib
-from email.message import EmailMessage
+import shared_utils as su
 
 st.set_page_config(page_title="Equipment Dashboard", layout="wide")
 st.title("📊 Equipment Dashboard")
@@ -40,7 +37,6 @@ else:
         "scans_chart": user_role == "admin"
     }
 
-# Sidebar toggles
 st.sidebar.subheader("🧩 Dashboard Sections")
 for key in st.session_state.visible_widgets:
     if user_role == "admin" or key not in ["maintenance_chart", "scans_chart"]:
@@ -48,7 +44,6 @@ for key in st.session_state.visible_widgets:
             key.replace("_", " ").title(), st.session_state.visible_widgets[key]
         )
 
-# Sidebar chart controls
 st.sidebar.subheader("📊 Chart Type")
 chart_type = st.sidebar.radio("Select chart type", ["Bar", "Pie"])
 
@@ -59,44 +54,34 @@ end_date = st.sidebar.date_input("End Date", datetime.today())
 if st.sidebar.checkbox("🔄 Auto Refresh"):
     st.rerun()
 
-# Save layout state
 with open(layout_file, "w") as f:
     yaml.dump(st.session_state.visible_widgets, f)
 
-# --- Load Tables ---
-conn = sqlite3.connect(db_path)
-def load_table(name):
-    try:
-        return pd.read_sql_query(f"SELECT * FROM {name}", conn)
-    except:
-        return pd.DataFrame()
-
-equipment_df = load_table(active_table)
-maintenance_df = load_table("maintenance_log")
-scans_df = load_table("scanned_items")
-conn.close()
+# --- Load Tables centrally ---
+equipment_df = su.load_table(db_path, active_table)
+maintenance_df = su.load_table(db_path, "maintenance_log")
+scans_df = su.load_table(db_path, "scanned_items")
 
 # --- Merge Maintenance Date Info ---
 if not maintenance_df.empty and 'date' in maintenance_df.columns:
     maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
     maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
 
-    equipment_df = equipment_df.copy()
     id_col = next((col for col in equipment_df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
-
     if id_col:
         equipment_df[id_col] = equipment_df[id_col].astype(str).str.strip()
+
         latest_maintenance = (
             maintenance_df.sort_values("date")
             .dropna(subset=["equipment_id"])
             .drop_duplicates(subset=["equipment_id"], keep="last")[["equipment_id", "date"]]
         )
+
         equipment_df = equipment_df.merge(
-            latest_maintenance,
-            how="left",
-            left_on=id_col,
-            right_on="equipment_id"
+            latest_maintenance, how="left",
+            left_on=id_col, right_on="equipment_id"
         )
+
         equipment_df["maintenance_status"] = equipment_df["date"].apply(
             lambda d: "🟢 Recent" if pd.notna(d) and (datetime.today() - d).days <= 30
             else ("🔴 Old" if pd.notna(d) else "⚪ Never")
