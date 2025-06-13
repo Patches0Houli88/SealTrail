@@ -1,9 +1,9 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import yaml
 import os
 from datetime import datetime
+import shared_utils as su
 
 st.set_page_config(page_title="Inventory", layout="wide")
 st.title("📦 Inventory Management")
@@ -21,20 +21,12 @@ if not db_path or not os.path.exists(db_path):
     st.error("No active database. Please return to the main page.")
     st.stop()
 
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
+# --- Load Inventory ---
+df = su.load_table(db_path, active_table)
 
-# --- Load Data ---
-def load_data():
-    try:
-        df = pd.read_sql(f"SELECT rowid, * FROM {active_table}", conn)
-        if "equipment_id" in df.columns:
-            df["equipment_id"] = df["equipment_id"].astype(str).str.strip()
-        return df
-    except:
-        return pd.DataFrame()
-
-df = load_data()
+# Strip equipment_id formatting as before
+if "equipment_id" in df.columns:
+    df["equipment_id"] = df["equipment_id"].astype(str).str.strip()
 
 # --- Template File ---
 template_file = "templates.yaml"
@@ -55,15 +47,16 @@ if user_role == "admin":
         col_type = st.selectbox("Column Type", ["TEXT", "INTEGER", "REAL"])
         if st.button("Add Column") and new_col:
             try:
-                cursor.execute(f"ALTER TABLE {active_table} ADD COLUMN {new_col} {col_type}")
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS audit_log (
-                        timestamp TEXT, action TEXT, user TEXT, detail TEXT
-                    )
-                """)
-                cursor.execute("INSERT INTO audit_log VALUES (?, ?, ?, ?)",
-                    (datetime.utcnow().isoformat(), "Add Column", user_email, f"{new_col} ({col_type})"))
-                conn.commit()
+                with su.get_conn(db_path) as conn:
+                    conn.execute(f"ALTER TABLE {active_table} ADD COLUMN {new_col} {col_type}")
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS audit_log (
+                            timestamp TEXT, action TEXT, user TEXT, detail TEXT
+                        )
+                    """)
+                    conn.execute("INSERT INTO audit_log VALUES (?, ?, ?, ?)",
+                        (datetime.utcnow().isoformat(), "Add Column", user_email, f"{new_col} ({col_type})"))
+                    conn.commit()
                 st.success(f"Column `{new_col}` added.")
                 st.rerun()
             except Exception as e:
@@ -93,8 +86,9 @@ if not df.empty:
     if st.button("Add to Inventory"):
         values = tuple(new_data[col] for col in col_names)
         placeholders = ', '.join('?' for _ in values)
-        cursor.execute(f"INSERT INTO {active_table} ({', '.join(col_names)}) VALUES ({placeholders})", values)
-        conn.commit()
+        with su.get_conn(db_path) as conn:
+            conn.execute(f"INSERT INTO {active_table} ({', '.join(col_names)}) VALUES ({placeholders})", values)
+            conn.commit()
         st.success("✅ Item added!")
         st.rerun()
 
@@ -114,9 +108,7 @@ else:
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("💾 Save Changes"):
-            cursor.execute(f"DELETE FROM {active_table}")
-            editable_df.drop(columns=["rowid", "selected"]).to_sql(active_table, conn, if_exists="append", index=False)
-            conn.commit()
+            editable_df.drop(columns=["rowid", "selected"]).to_sql(active_table, su.get_conn(db_path), if_exists="replace", index=False)
             st.success("Saved successfully.")
             st.rerun()
 
@@ -124,8 +116,9 @@ else:
         if st.button("🗑 Delete Selected"):
             to_delete = editable_df[editable_df["selected"] == True]["rowid"].tolist()
             if to_delete:
-                cursor.executemany(f"DELETE FROM {active_table} WHERE rowid = ?", [(rid,) for rid in to_delete])
-                conn.commit()
+                with su.get_conn(db_path) as conn:
+                    conn.executemany(f"DELETE FROM {active_table} WHERE rowid = ?", [(rid,) for rid in to_delete])
+                    conn.commit()
                 st.success(f"Deleted {len(to_delete)} item(s).")
                 st.rerun()
 
@@ -142,4 +135,3 @@ else:
                 st.warning("⚠️ Please select one row to set as a template.")
             else:
                 st.warning("⚠️ Please select only one row.")
-conn.close()
