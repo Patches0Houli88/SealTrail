@@ -5,7 +5,7 @@ from datetime import datetime
 import shared_utils as su
 
 st.set_page_config(page_title="Global Search & Filters", layout="wide")
-st.title("Global Search & Filters")
+st.title("Search & Filters")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
@@ -21,14 +21,14 @@ equipment_df = su.load_equipment()
 maintenance_df = su.load_maintenance()
 scans_df = su.load_scans()
 
+# --- Audit log entry for search access ---
+su.log_audit("View Search Page", f"Accessed global search for table {active_table}")
+
 # --- Global Search ---
-st.subheader("Global Search")
+st.subheader("🔎 Global Search")
 search_term = st.text_input("Enter keyword to search across all tables:")
 
 if search_term:
-    # Audit log for search
-    su.log_audit(db_path, user_email, "Global Search", f"Searched for: '{search_term}'")
-    
     st.markdown("### Search Results:")
     found_any = False
 
@@ -65,7 +65,7 @@ st.subheader("Advanced Filters")
 
 # --- Equipment Filters ---
 if not equipment_df.empty:
-    with st.expander("Equipment Filters"):
+    with st.expander("🔧 Equipment Filters"):
         cols_lower = {col.lower(): col for col in equipment_df.columns}
         type_col = cols_lower.get("equipment_type") or cols_lower.get("type")
         status_col = cols_lower.get("status")
@@ -89,7 +89,7 @@ if not equipment_df.empty:
 
 # --- Maintenance Filters ---
 if not maintenance_df.empty:
-    with st.expander("Maintenance Filters"):
+    with st.expander("🛠 Maintenance Filters"):
         techs = ["All"] + sorted(maintenance_df["technician"].dropna().unique().tolist())
         tech_choice = st.selectbox("Technician", techs)
         date_range = st.date_input("Maintenance Date Range", [datetime.today().replace(day=1), datetime.today()])
