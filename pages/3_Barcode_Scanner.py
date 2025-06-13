@@ -14,18 +14,14 @@ st.title("📷 Scan & Track Equipment")
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-db_path = st.session_state.get("db_path")
-active_table = st.session_state.get("active_table", "equipment")
+db_path = su.get_db_path()
+active_table = su.get_active_table()
 
 st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
 st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
-if not db_path or not os.path.exists(db_path):
-    st.error("No database loaded. Please return to the main page.")
-    st.stop()
-
 # --- Ensure scanned_items table exists ---
-with su.get_conn(db_path) as conn:
+with su.load_connection() as conn:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scanned_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,9 +33,9 @@ with su.get_conn(db_path) as conn:
     """)
     conn.commit()
 
-# --- Load Equipment for matching ---
-df_equipment = su.load_table(db_path, active_table)
-id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+# --- Load Equipment ---
+df_equipment = su.load_equipment()
+id_col = su.get_id_column(df_equipment)
 if id_col:
     df_equipment["equipment_id"] = df_equipment[id_col].astype(str).str.strip()
 else:
@@ -100,7 +96,7 @@ if equipment_id:
 
     if submit:
         try:
-            with su.get_conn(db_path) as conn:
+            with su.load_connection() as conn:
                 if record is not None:
                     clause = ", ".join([f"{k}=?" for k in updated.keys()])
                     conn.execute(
@@ -128,7 +124,7 @@ if equipment_id:
 
 # --- Scan Log ---
 st.markdown("### 📋 Scan Log & Analytics")
-scan_df = su.load_table(db_path, "scanned_items")
+scan_df = su.load_scans()
 
 # --- Filters ---
 filter_col1, filter_col2 = st.columns(2)
@@ -137,7 +133,7 @@ filter_id = filter_col2.text_input("🔍 Filter by Equipment ID", "")
 
 filtered = scan_df.copy()
 if filter_date:
-    filtered = filtered[filtered["timestamp"].str.startswith(str(filter_date))]
+    filtered = filtered[filtered["timestamp"].dt.date == filter_date]
 if filter_id:
     filtered = filtered[filtered["equipment_id"].str.contains(filter_id, case=False, na=False)]
 
@@ -145,11 +141,9 @@ st.dataframe(filtered, use_container_width=True)
 
 # --- Scan Trend Chart ---
 if not scan_df.empty:
-    scan_df["timestamp"] = pd.to_datetime(scan_df["timestamp"], errors="coerce")
-    scan_df["scan_date"] = scan_df["timestamp"].dt.date
-    scan_trend = scan_df.groupby("scan_date").size().reset_index(name="scans")
+    scan_trend = scan_df.groupby("timestamp").size().reset_index(name="scans")
     chart = alt.Chart(scan_trend).mark_bar().encode(
-        x="scan_date:T", y="scans:Q"
+        x="timestamp:T", y="scans:Q"
     ).properties(title="📈 Scans Over Time")
     st.altair_chart(chart, use_container_width=True)
 
