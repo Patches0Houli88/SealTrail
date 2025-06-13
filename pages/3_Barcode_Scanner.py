@@ -6,22 +6,25 @@ import os
 from zipfile import ZipFile
 import altair as alt
 from datetime import datetime
-import shared_utils as su
+from shared_utils import (
+    get_db_path, get_active_table, load_connection, load_equipment, load_scans,
+    get_id_column, log_audit
+)
 
 st.set_page_config(page_title="Barcode Scanner", layout="wide")
-st.title("📷 Scan & Track Equipment")
+st.title("Scan & Track Equipment")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-db_path = su.get_db_path()
-active_table = su.get_active_table()
+db_path = get_db_path()
+active_table = get_active_table()
 
-st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
+st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.info(f"Active Table: `{active_table}`")
 
 # --- Ensure scanned_items table exists ---
-with su.load_connection() as conn:
+with load_connection() as conn:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scanned_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,9 +36,9 @@ with su.load_connection() as conn:
     """)
     conn.commit()
 
-# --- Load Equipment ---
-df_equipment = su.load_equipment()
-id_col = su.get_id_column(df_equipment)
+# --- Load Equipment for matching ---
+df_equipment = load_equipment()
+id_col = get_id_column(df_equipment)
 if id_col:
     df_equipment["equipment_id"] = df_equipment[id_col].astype(str).str.strip()
 else:
@@ -43,8 +46,8 @@ else:
 
 # --- Scanner UI ---
 st.markdown("### 🔍 Scanner Status")
-camera_active = st.checkbox("🟢 Start Scanner")
-st.info("📸 Scanner is **active**." if camera_active else "⛔ Scanner is **inactive**.")
+camera_active = st.checkbox("Start Scanner")
+st.info(" Scanner is **active**." if camera_active else " Scanner is **inactive**.")
 
 # --- Scan Entry ---
 st.markdown("### 🏷️ Scan or Enter Equipment ID")
@@ -96,13 +99,14 @@ if equipment_id:
 
     if submit:
         try:
-            with su.load_connection() as conn:
+            with load_connection() as conn:
                 if record is not None:
                     clause = ", ".join([f"{k}=?" for k in updated.keys()])
                     conn.execute(
                         f"UPDATE {active_table} SET {clause} WHERE LOWER({id_col}) = LOWER(?)",
                         list(updated.values()) + [equipment_id]
                     )
+                    log_audit(db_path, user_email, "Update Item", f"Updated {equipment_id} in {active_table}")
                     st.success("Record updated.")
                 else:
                     columns = f"{id_col}, " + ", ".join(updated.keys())
@@ -111,12 +115,15 @@ if equipment_id:
                         f"INSERT INTO {active_table} ({columns}) VALUES ({placeholders})",
                         [equipment_id] + list(updated.values())
                     )
+                    log_audit(db_path, user_email, "Add Item", f"Added new equipment {equipment_id} to {active_table}")
                     st.success("New record added.")
 
                 conn.execute("""
                     INSERT INTO scanned_items (equipment_id, location, timestamp, scanned_by) 
                     VALUES (?, ?, ?, ?)""",
                     (equipment_id, location, str(datetime.now()), user_email))
+
+                log_audit(db_path, user_email, "Scan Entry", f"Scanned {equipment_id} at {location}")
                 conn.commit()
                 st.success("Scan recorded.")
         except Exception as e:
@@ -124,7 +131,7 @@ if equipment_id:
 
 # --- Scan Log ---
 st.markdown("### 📋 Scan Log & Analytics")
-scan_df = su.load_scans()
+scan_df = load_scans()
 
 # --- Filters ---
 filter_col1, filter_col2 = st.columns(2)
@@ -141,14 +148,15 @@ st.dataframe(filtered, use_container_width=True)
 
 # --- Scan Trend Chart ---
 if not scan_df.empty:
-    scan_trend = scan_df.groupby("timestamp").size().reset_index(name="scans")
+    scan_df["scan_date"] = scan_df["timestamp"].dt.date
+    scan_trend = scan_df.groupby("scan_date").size().reset_index(name="scans")
     chart = alt.Chart(scan_trend).mark_bar().encode(
-        x="timestamp:T", y="scans:Q"
-    ).properties(title="📈 Scans Over Time")
+        x="scan_date:T", y="scans:Q"
+    ).properties(title="Scans Over Time")
     st.altair_chart(chart, use_container_width=True)
 
 # --- Group Summary ---
-with st.expander("📊 Group Summary"):
+with st.expander("Group Summary"):
     by = st.selectbox("Group scans by:", ["scanned_by", "location"])
     summary = scan_df.groupby(by).size().reset_index(name="count")
     st.bar_chart(summary.set_index(by))
