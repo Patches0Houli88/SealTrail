@@ -1,32 +1,29 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import yaml
 import os
 from datetime import datetime
-import shared_utils as su
+from shared_utils import (
+    load_connection, load_equipment, get_active_table, get_db_path,
+    load_settings_yaml, save_settings_yaml, get_id_column, log_audit
+)
 
-st.set_page_config(page_title="Inventory", layout="wide")
+st.set_page_config(page_title="Inventory Management", layout="wide")
 st.title("📦 Inventory Management")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-db_path = st.session_state.get("db_path", None)
-active_table = st.session_state.get("active_table", "equipment")
 
 st.sidebar.markdown(f"🔐 Role: {user_role} | 📧 Email: {user_email}")
+active_table = get_active_table()
+db_path = get_db_path()
+
 st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
-if not db_path or not os.path.exists(db_path):
-    st.error("No active database. Please return to the main page.")
-    st.stop()
-
-# --- Load Inventory ---
-df = su.load_table(db_path, active_table)
-
-# Strip equipment_id formatting as before
-if "equipment_id" in df.columns:
-    df["equipment_id"] = df["equipment_id"].astype(str).str.strip()
+# --- Load Data ---
+df = load_equipment()
 
 # --- Template File ---
 template_file = "templates.yaml"
@@ -47,16 +44,17 @@ if user_role == "admin":
         col_type = st.selectbox("Column Type", ["TEXT", "INTEGER", "REAL"])
         if st.button("Add Column") and new_col:
             try:
-                with su.get_conn(db_path) as conn:
+                with load_connection() as conn:
                     conn.execute(f"ALTER TABLE {active_table} ADD COLUMN {new_col} {col_type}")
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS audit_log (
-                            timestamp TEXT, action TEXT, user TEXT, detail TEXT
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            timestamp TEXT, user_email TEXT, action TEXT, detail TEXT
                         )
                     """)
-                    conn.execute("INSERT INTO audit_log VALUES (?, ?, ?, ?)",
-                        (datetime.utcnow().isoformat(), "Add Column", user_email, f"{new_col} ({col_type})"))
-                    conn.commit()
+                    timestamp = datetime.utcnow().isoformat()
+                    conn.execute("INSERT INTO audit_log (timestamp, user_email, action, detail) VALUES (?, ?, ?, ?)",
+                        (timestamp, user_email, "Add Column", f"{new_col} ({col_type})"))
                 st.success(f"Column `{new_col}` added.")
                 st.rerun()
             except Exception as e:
@@ -84,13 +82,16 @@ if not df.empty:
             new_data[col] = cols[i].text_input(col, value=default, key=f"input_{col}")
 
     if st.button("Add to Inventory"):
-        values = tuple(new_data[col] for col in col_names)
-        placeholders = ', '.join('?' for _ in values)
-        with su.get_conn(db_path) as conn:
-            conn.execute(f"INSERT INTO {active_table} ({', '.join(col_names)}) VALUES ({placeholders})", values)
-            conn.commit()
-        st.success("✅ Item added!")
-        st.rerun()
+        try:
+            with load_connection() as conn:
+                values = tuple(new_data[col] for col in col_names)
+                placeholders = ', '.join('?' for _ in values)
+                conn.execute(f"INSERT INTO {active_table} ({', '.join(col_names)}) VALUES ({placeholders})", values)
+                log_audit(db_path, user_email, "Add Item", f"Added item to {active_table}: {new_data}")
+            st.success("✅ Item added!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Failed to add item: {e}")
 
 # --- Edit/Delete Table ---
 st.subheader("📝 Edit & Delete Items")
@@ -108,19 +109,28 @@ else:
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("💾 Save Changes"):
-            editable_df.drop(columns=["rowid", "selected"]).to_sql(active_table, su.get_conn(db_path), if_exists="replace", index=False)
-            st.success("Saved successfully.")
-            st.rerun()
+            try:
+                with load_connection() as conn:
+                    conn.execute(f"DELETE FROM {active_table}")
+                    editable_df.drop(columns=["rowid", "selected"]).to_sql(active_table, conn, if_exists="append", index=False)
+                    log_audit(db_path, user_email, "Save Changes", f"Updated all rows in {active_table}")
+                st.success("Saved successfully.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to save changes: {e}")
 
     with col2:
         if st.button("🗑 Delete Selected"):
-            to_delete = editable_df[editable_df["selected"] == True]["rowid"].tolist()
-            if to_delete:
-                with su.get_conn(db_path) as conn:
-                    conn.executemany(f"DELETE FROM {active_table} WHERE rowid = ?", [(rid,) for rid in to_delete])
-                    conn.commit()
-                st.success(f"Deleted {len(to_delete)} item(s).")
-                st.rerun()
+            try:
+                to_delete = editable_df[editable_df["selected"] == True]["rowid"].tolist()
+                if to_delete:
+                    with load_connection() as conn:
+                        conn.executemany(f"DELETE FROM {active_table} WHERE rowid = ?", [(rid,) for rid in to_delete])
+                        log_audit(db_path, user_email, "Delete Items", f"Deleted rows {to_delete} from {active_table}")
+                    st.success(f"Deleted {len(to_delete)} item(s).")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to delete items: {e}")
 
     with col3:
         if st.button("📌 Set as Template"):
