@@ -16,7 +16,7 @@ db_path = su.get_db_path()
 active_table = su.get_active_table()
 
 st.sidebar.markdown(f"Role: {user_role} | 📧 Email: {user_email}")
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
+st.sidebar.info(f"Active Table: `{active_table}`")
 
 # --- Sidebar: Layout Toggles ---
 layout_file = f"layout_{user_email.replace('@','_at_')}.yaml"
@@ -39,7 +39,7 @@ for key in st.session_state.visible_widgets:
             key.replace("_", " ").title(), st.session_state.visible_widgets[key]
         )
 
-st.sidebar.subheader("📊 Chart Type")
+st.sidebar.subheader("Chart Type")
 chart_type = st.sidebar.radio("Select chart type", ["Bar", "Pie"])
 
 st.sidebar.subheader("📅 Date Filter")
@@ -52,12 +52,12 @@ if st.sidebar.checkbox("🔄 Auto Refresh"):
 with open(layout_file, "w") as f:
     yaml.dump(st.session_state.visible_widgets, f)
 
-# --- Load Tables centrally ---
+# --- Load Data centrally ---
 equipment_df = su.load_equipment()
 maintenance_df = su.load_maintenance()
 scans_df = su.load_scans()
 
-# --- Merge Maintenance Date Info ---
+# --- Merge Maintenance Info ---
 if not maintenance_df.empty:
     id_col = su.get_id_column(equipment_df)
     latest_maintenance = (
@@ -76,9 +76,12 @@ if not maintenance_df.empty:
 else:
     equipment_df["maintenance_status"] = "⚪ Never"
 
+# ✅ Audit this dashboard load
+su.log_audit(db_path, user_email, "View Dashboard", f"Loaded dashboard for {active_table}")
+
 # --- KPI ---
 if st.session_state.visible_widgets.get("kpis"):
-    st.subheader("📌 Key Stats")
+    st.subheader("Key Stats")
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Records", len(equipment_df))
 
@@ -110,7 +113,7 @@ if st.session_state.visible_widgets.get("inventory_table"):
 
 # --- Maintenance Chart ---
 if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
-    st.subheader("Maintenance Logs Over Time")
+    st.subheader("🛠 Maintenance Logs Over Time")
     filtered = maintenance_df[
         (maintenance_df["date"] >= pd.to_datetime(start_date)) &
         (maintenance_df["date"] <= pd.to_datetime(end_date))
