@@ -6,7 +6,7 @@ from datetime import datetime
 import yaml
 import shared_utils as su
 
-st.set_page_config(page_title="Equipment Dashboard", layout="wide")
+st.set_page_config(page_title="Dashboard", layout="wide")
 st.title("Dashboard")
 
 # --- Session Info ---
@@ -18,7 +18,7 @@ active_table = su.get_active_table()
 st.sidebar.markdown(f"Role: {user_role} | 📧 Email: {user_email}")
 st.sidebar.info(f"Active Table: `{active_table}`")
 
-# --- Sidebar: Layout Toggles ---
+# --- Sidebar Layout Toggles ---
 layout_file = f"layout_{user_email.replace('@','_at_')}.yaml"
 if os.path.exists(layout_file):
     with open(layout_file) as f:
@@ -42,17 +42,17 @@ for key in st.session_state.visible_widgets:
 st.sidebar.subheader("Chart Type")
 chart_type = st.sidebar.radio("Select chart type", ["Bar", "Pie"])
 
-st.sidebar.subheader("📅 Date Filter")
+st.sidebar.subheader("Date Filter")
 start_date = st.sidebar.date_input("Start Date", datetime.today().replace(day=1))
 end_date = st.sidebar.date_input("End Date", datetime.today())
 
-if st.sidebar.checkbox("🔄 Auto Refresh"):
+if st.sidebar.checkbox("Auto Refresh"):
     st.rerun()
 
 with open(layout_file, "w") as f:
     yaml.dump(st.session_state.visible_widgets, f)
 
-# --- Load Data centrally ---
+# --- Load Tables centrally ---
 equipment_df = su.load_equipment()
 maintenance_df = su.load_maintenance()
 scans_df = su.load_scans()
@@ -76,8 +76,8 @@ if not maintenance_df.empty:
 else:
     equipment_df["maintenance_status"] = "⚪ Never"
 
-# ✅ Audit this dashboard load
-su.log_audit(db_path, user_email, "View Dashboard", f"Loaded dashboard for {active_table}")
+# --- Audit logging for dashboard access ---
+su.log_audit("View Dashboard", f"Loaded dashboard for table {active_table}")
 
 # --- KPI ---
 if st.session_state.visible_widgets.get("kpis"):
@@ -113,7 +113,7 @@ if st.session_state.visible_widgets.get("inventory_table"):
 
 # --- Maintenance Chart ---
 if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
-    st.subheader("🛠 Maintenance Logs Over Time")
+    st.subheader("Maintenance Logs Over Time")
     filtered = maintenance_df[
         (maintenance_df["date"] >= pd.to_datetime(start_date)) &
         (maintenance_df["date"] <= pd.to_datetime(end_date))
