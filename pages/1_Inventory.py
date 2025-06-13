@@ -1,19 +1,21 @@
 import streamlit as st
 import pandas as pd
+import yaml
 import os
 from datetime import datetime
 import shared_utils as su
 
-st.set_page_config(page_title="Inventory", layout="wide")
-st.title("Inventory Management")
+st.set_page_config(page_title="Inventory Management", layout="wide")
+st.title("📦 Inventory Management")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
-
-db_path = su.get_db_path()
 active_table = su.get_active_table()
+db_path = su.get_db_path()
+
+st.sidebar.markdown(f"🔐 Role: {user_role} | 📧 Email: {user_email}")
+st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
 # --- Load Data ---
 df = su.load_equipment()
@@ -39,7 +41,7 @@ if user_role == "admin":
             try:
                 with su.load_connection() as conn:
                     conn.execute(f"ALTER TABLE {active_table} ADD COLUMN {new_col} {col_type}")
-                    su.log_audit("Add Column", user_email, f"Column `{new_col}` ({col_type}) added")
+                su.log_audit("Add Column", f"{new_col} ({col_type}) added to {active_table}")
                 st.success(f"Column `{new_col}` added.")
                 st.rerun()
             except Exception as e:
@@ -48,7 +50,7 @@ if user_role == "admin":
 # --- Add New Item Using Template ---
 if not df.empty:
     st.subheader("➕ Add New Item")
-    col_names = df.columns.drop(["rowid", "selected"], errors="ignore")
+    col_names = df.columns.drop(["selected"], errors="ignore")
     new_data = {}
 
     cols = st.columns(len(col_names))
@@ -72,25 +74,24 @@ if not df.empty:
                 values = tuple(new_data[col] for col in col_names)
                 placeholders = ', '.join('?' for _ in values)
                 conn.execute(f"INSERT INTO {active_table} ({', '.join(col_names)}) VALUES ({placeholders})", values)
-                conn.commit()
-                su.log_audit("Add Item", user_email, f"Item `{new_data}` added")
+            su.log_audit("Add Item", f"New item added to {active_table}")
             st.success("✅ Item added!")
             st.rerun()
         except Exception as e:
             st.error(f"Failed to add item: {e}")
 
 # --- Edit/Delete Table ---
-st.subheader("Edit & Delete Items")
+st.subheader("📝 Edit & Delete Items")
 if df.empty:
     st.info("No inventory yet.")
 else:
-    filter_col = st.selectbox("Filter by column", df.columns.drop("rowid"))
+    filter_col = st.selectbox("Filter by column", df.columns)
     filter_val = st.text_input("Contains")
     if filter_val:
         df = df[df[filter_col].astype(str).str.contains(filter_val, na=False)]
 
     df["selected"] = False
-    editable_df = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="editor_table", disabled=["rowid"])
+    editable_df = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="editor_table", disabled=[])
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -98,39 +99,38 @@ else:
             try:
                 with su.load_connection() as conn:
                     conn.execute(f"DELETE FROM {active_table}")
-                    editable_df.drop(columns=["rowid", "selected"]).to_sql(active_table, conn, if_exists="append", index=False)
-                    conn.commit()
-                    su.log_audit("Save Changes", user_email, "Full table overwritten")
+                    editable_df.drop(columns=["selected"]).to_sql(active_table, conn, if_exists="append", index=False)
+                su.log_audit("Save Changes", f"Table {active_table} fully updated")
                 st.success("Saved successfully.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to save: {e}")
+                st.error(f"Failed to save changes: {e}")
 
     with col2:
         if st.button("🗑 Delete Selected"):
-            to_delete = editable_df[editable_df["selected"] == True]["rowid"].tolist()
-            if to_delete:
-                try:
+            try:
+                to_delete = editable_df[editable_df["selected"] == True]
+                if not to_delete.empty:
                     with su.load_connection() as conn:
-                        conn.executemany(f"DELETE FROM {active_table} WHERE rowid = ?", [(rid,) for rid in to_delete])
-                        conn.commit()
-                        su.log_audit("Delete Rows", user_email, f"Deleted rows: {to_delete}")
+                        for _, row in to_delete.iterrows():
+                            condition = ' AND '.join([f"{col} = ?" for col in to_delete.columns if col != 'selected'])
+                            conn.execute(f"DELETE FROM {active_table} WHERE {condition}", tuple(row[col] for col in to_delete.columns if col != 'selected'))
+                    su.log_audit("Delete Items", f"{len(to_delete)} rows deleted from {active_table}")
                     st.success(f"Deleted {len(to_delete)} item(s).")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to delete: {e}")
+            except Exception as e:
+                st.error(f"Failed to delete items: {e}")
 
     with col3:
-        if st.button("Set as Template"):
+        if st.button("📌 Set as Template"):
             selected = editable_df[editable_df["selected"] == True]
             if len(selected) == 1:
-                row = selected.drop(columns=["rowid", "selected"]).iloc[0].to_dict()
+                row = selected.drop(columns=["selected"]).iloc[0].to_dict()
                 templates[table_key] = row
                 with open(template_file, "w") as f:
                     yaml.safe_dump(templates, f)
-                su.log_audit("Set Template", user_email, f"Template saved: {row}")
-                st.success("✅ Template saved for future entries.")
+                st.success("✅ Template saved.")
             elif len(selected) == 0:
-                st.warning("⚠️ Please select one row to set as a template.")
+                st.warning("Please select one row.")
             else:
-                st.warning("⚠️ Please select only one row.")
+                st.warning("Select only one row.")
