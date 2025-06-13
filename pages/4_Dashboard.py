@@ -2,25 +2,20 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import yaml
 import shared_utils as su
 
 st.set_page_config(page_title="Equipment Dashboard", layout="wide")
-st.title("📊 Equipment Dashboard")
+st.title("Dashboard")
 
-# --- Get User Info ---
+# --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
+db_path = su.get_db_path()
+active_table = su.get_active_table()
 
-# --- Validate DB Path ---
-db_path = st.session_state.get("db_path", None)
-if not db_path or not os.path.exists(db_path):
-    st.error("No valid database selected. Please return to the main page.")
-    st.stop()
-
-# --- Active Table ---
-active_table = st.session_state.get("active_table", "equipment")
+st.sidebar.markdown(f"Role: {user_role} | 📧 Email: {user_email}")
 st.sidebar.info(f"📦 Active Table: `{active_table}`")
 
 # --- Sidebar: Layout Toggles ---
@@ -37,7 +32,7 @@ else:
         "scans_chart": user_role == "admin"
     }
 
-st.sidebar.subheader("🧩 Dashboard Sections")
+st.sidebar.subheader("Dashboard Sections")
 for key in st.session_state.visible_widgets:
     if user_role == "admin" or key not in ["maintenance_chart", "scans_chart"]:
         st.session_state.visible_widgets[key] = st.sidebar.checkbox(
@@ -58,34 +53,26 @@ with open(layout_file, "w") as f:
     yaml.dump(st.session_state.visible_widgets, f)
 
 # --- Load Tables centrally ---
-equipment_df = su.load_table(db_path, active_table)
-maintenance_df = su.load_table(db_path, "maintenance_log")
-scans_df = su.load_table(db_path, "scanned_items")
+equipment_df = su.load_equipment()
+maintenance_df = su.load_maintenance()
+scans_df = su.load_scans()
 
 # --- Merge Maintenance Date Info ---
-if not maintenance_df.empty and 'date' in maintenance_df.columns:
-    maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
-    maintenance_df["equipment_id"] = maintenance_df["equipment_id"].astype(str).str.strip()
-
-    id_col = next((col for col in equipment_df.columns if col.lower() in ["asset_id", "equipment_id"]), None)
-    if id_col:
-        equipment_df[id_col] = equipment_df[id_col].astype(str).str.strip()
-
-        latest_maintenance = (
-            maintenance_df.sort_values("date")
-            .dropna(subset=["equipment_id"])
-            .drop_duplicates(subset=["equipment_id"], keep="last")[["equipment_id", "date"]]
-        )
-
-        equipment_df = equipment_df.merge(
-            latest_maintenance, how="left",
-            left_on=id_col, right_on="equipment_id"
-        )
-
-        equipment_df["maintenance_status"] = equipment_df["date"].apply(
-            lambda d: "🟢 Recent" if pd.notna(d) and (datetime.today() - d).days <= 30
-            else ("🔴 Old" if pd.notna(d) else "⚪ Never")
-        )
+if not maintenance_df.empty:
+    id_col = su.get_id_column(equipment_df)
+    latest_maintenance = (
+        maintenance_df.sort_values("date")
+        .dropna(subset=["equipment_id"])
+        .drop_duplicates(subset=["equipment_id"], keep="last")[["equipment_id", "date"]]
+    )
+    equipment_df = equipment_df.merge(
+        latest_maintenance, how="left",
+        left_on=id_col, right_on="equipment_id"
+    )
+    equipment_df["maintenance_status"] = equipment_df["date"].apply(
+        lambda d: "🟢 Recent" if pd.notna(d) and (datetime.today() - d).days <= 30
+        else ("🔴 Old" if pd.notna(d) else "⚪ Never")
+    )
 else:
     equipment_df["maintenance_status"] = "⚪ Never"
 
@@ -95,8 +82,7 @@ if st.session_state.visible_widgets.get("kpis"):
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Records", len(equipment_df))
 
-    cols_lower = {c.lower(): c for c in equipment_df.columns}
-    type_col = cols_lower.get("equipment_type") or cols_lower.get("type")
+    type_col = su.get_type_column(equipment_df)
     if type_col:
         top_types = equipment_df[type_col].astype(str).str.strip().value_counts()
         if not top_types.empty:
@@ -106,7 +92,7 @@ if st.session_state.visible_widgets.get("kpis"):
 
 # --- Status Chart ---
 if st.session_state.visible_widgets.get("status_chart"):
-    st.subheader("📦 Equipment Status")
+    st.subheader("Equipment Status")
     status_col = next((col for col in equipment_df.columns if col.lower() == "status"), None)
     if status_col:
         status_data = equipment_df[status_col].dropna().astype(str).str.title().value_counts().reset_index()
@@ -119,13 +105,12 @@ if st.session_state.visible_widgets.get("status_chart"):
 
 # --- Inventory Table ---
 if st.session_state.visible_widgets.get("inventory_table"):
-    st.subheader("📋 Current Active Table")
+    st.subheader("Current Active Table")
     st.dataframe(equipment_df, use_container_width=True)
 
 # --- Maintenance Chart ---
-if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty and "date" in maintenance_df.columns:
-    st.subheader("🛠 Maintenance Logs Over Time")
-    maintenance_df["date"] = pd.to_datetime(maintenance_df["date"], errors="coerce")
+if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance_df.empty:
+    st.subheader("Maintenance Logs Over Time")
     filtered = maintenance_df[
         (maintenance_df["date"] >= pd.to_datetime(start_date)) &
         (maintenance_df["date"] <= pd.to_datetime(end_date))
@@ -137,15 +122,13 @@ if st.session_state.visible_widgets.get("maintenance_chart") and not maintenance
 
 # --- Scans Chart ---
 if st.session_state.visible_widgets.get("scans_chart") and not scans_df.empty:
-    st.subheader("📷 Scans Over Time")
-    if "timestamp" in scans_df.columns:
-        scans_df["timestamp"] = pd.to_datetime(scans_df["timestamp"], errors="coerce")
-        scans_df["scan_date"] = scans_df["timestamp"].dt.date
-        filtered = scans_df[
-            (scans_df["scan_date"] >= start_date) & (scans_df["scan_date"] <= end_date)
-        ]
-        scan_data = filtered.groupby("scan_date").size().reset_index(name="count")
-        chart = alt.Chart(scan_data).mark_line(point=True).encode(
-            x="scan_date:T", y="count:Q"
-        )
-        st.altair_chart(chart, use_container_width=True)
+    st.subheader("Scans Over Time")
+    filtered = scans_df[
+        (scans_df["timestamp"].dt.date >= start_date) &
+        (scans_df["timestamp"].dt.date <= end_date)
+    ]
+    scan_data = filtered.groupby("timestamp").size().reset_index(name="count")
+    chart = alt.Chart(scan_data).mark_line(point=True).encode(
+        x="timestamp:T", y="count:Q"
+    )
+    st.altair_chart(chart, use_container_width=True)
