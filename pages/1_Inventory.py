@@ -10,17 +10,17 @@ from shared_utils import (
 )
 
 st.set_page_config(page_title="Inventory Management", layout="wide")
-st.title("📦 Inventory Management")
+st.title("Inventory Management")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
 
-st.sidebar.markdown(f"🔐 Role: {user_role} | 📧 Email: {user_email}")
+st.sidebar.markdown(f"Role: {user_role} | 📧 Email: {user_email}")
 active_table = get_active_table()
 db_path = get_db_path()
 
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
+st.sidebar.info(f"Active Table: `{active_table}`")
 
 # --- Load Data ---
 df = load_equipment()
@@ -94,7 +94,7 @@ if not df.empty:
             st.error(f"Failed to add item: {e}")
 
 # --- Edit/Delete Table ---
-st.subheader("📝 Edit & Delete Items")
+st.subheader("Edit & Delete Items")
 if df.empty:
     st.info("No inventory yet.")
 else:
@@ -133,7 +133,7 @@ else:
                 st.error(f"Failed to delete items: {e}")
 
     with col3:
-        if st.button("📌 Set as Template"):
+        if st.button("Set as Template"):
             selected = editable_df[editable_df["selected"] == True]
             if len(selected) == 1:
                 row = selected.drop(columns=["rowid", "selected"]).iloc[0].to_dict()
