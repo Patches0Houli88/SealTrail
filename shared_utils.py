@@ -71,3 +71,33 @@ def save_settings_yaml(settings):
     file = "maintenance_settings.yaml"
     with open(file, "w") as f:
         yaml.safe_dump(settings, f)
+
+### --- AUDIT LOGGER (NEW) ---
+def log_audit(db_path, user_email, action, detail):
+    """
+    Logs any user action to audit_log table.
+    """
+    if not os.path.exists(db_path):
+        return
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            user_email TEXT,
+            action TEXT,
+            detail TEXT
+        )
+    """)
+
+    timestamp = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT INTO audit_log (timestamp, user_email, action, detail)
+        VALUES (?, ?, ?, ?)
+    """, (timestamp, user_email, action, detail))
+
+    conn.commit()
+    conn.close()
