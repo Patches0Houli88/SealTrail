@@ -1,14 +1,12 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import qrcode
-from datetime import datetime
 import io
 import os
 from zipfile import ZipFile
 import altair as alt
-from email.message import EmailMessage
-import smtplib
+from datetime import datetime
+import shared_utils as su
 
 st.set_page_config(page_title="Barcode Scanner", layout="wide")
 st.title("📷 Scan & Track Equipment")
@@ -26,38 +24,26 @@ if not db_path or not os.path.exists(db_path):
     st.error("No database loaded. Please return to the main page.")
     st.stop()
 
-# --- Table Selection ---
-conn = sqlite3.connect(db_path)
-tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
-conn.close()
-
-st.sidebar.subheader("📂 Target Table")
-target_table = st.sidebar.selectbox("Scan or add entries to this table", tables)
-
 # --- Ensure scanned_items table exists ---
-conn = sqlite3.connect(db_path)
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS scanned_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        equipment_id TEXT,
-        location TEXT,
-        timestamp TEXT,
-        scanned_by TEXT
-    )
-""")
-conn.commit()
-conn.close()
+with su.get_conn(db_path) as conn:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scanned_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            equipment_id TEXT,
+            location TEXT,
+            timestamp TEXT,
+            scanned_by TEXT
+        )
+    """)
+    conn.commit()
 
 # --- Load Equipment for matching ---
-conn = sqlite3.connect(db_path)
-try:
-    df_equipment = pd.read_sql(f"SELECT * FROM {target_table}", conn)
-    id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+df_equipment = su.load_table(db_path, active_table)
+id_col = next((col for col in df_equipment.columns if col.lower() in ["asset_id", "equipment_id"]), None)
+if id_col:
     df_equipment["equipment_id"] = df_equipment[id_col].astype(str).str.strip()
-except Exception as e:
-    st.warning(f"Could not load active table: {e}")
-finally:
-    conn.close()
+else:
+    st.warning("Could not find equipment_id column.")
 
 # --- Scanner UI ---
 st.markdown("### 🔍 Scanner Status")
@@ -113,57 +99,36 @@ if equipment_id:
         submit = st.form_submit_button("✅ Save Entry")
 
     if submit:
-        conn = sqlite3.connect(db_path)
         try:
-            if record is not None:
-                clause = ", ".join([f"{k}=?" for k in updated.keys()])
-                conn.execute(
-                    f"UPDATE {target_table} SET {clause} WHERE LOWER({id_col}) = LOWER(?)",
-                    list(updated.values()) + [equipment_id]
-                )
-                st.success("Record updated.")
-            else:
-                columns = f"{id_col}, " + ", ".join(updated.keys())
-                placeholders = ", ".join(["?"] * (len(updated) + 1))
-                conn.execute(
-                    f"INSERT INTO {target_table} ({columns}) VALUES ({placeholders})",
-                    [equipment_id] + list(updated.values())
-                )
-                st.success("New record added.")
+            with su.get_conn(db_path) as conn:
+                if record is not None:
+                    clause = ", ".join([f"{k}=?" for k in updated.keys()])
+                    conn.execute(
+                        f"UPDATE {active_table} SET {clause} WHERE LOWER({id_col}) = LOWER(?)",
+                        list(updated.values()) + [equipment_id]
+                    )
+                    st.success("Record updated.")
+                else:
+                    columns = f"{id_col}, " + ", ".join(updated.keys())
+                    placeholders = ", ".join(["?"] * (len(updated) + 1))
+                    conn.execute(
+                        f"INSERT INTO {active_table} ({columns}) VALUES ({placeholders})",
+                        [equipment_id] + list(updated.values())
+                    )
+                    st.success("New record added.")
 
-            conn.execute("INSERT INTO scanned_items (equipment_id, location, timestamp, scanned_by) VALUES (?, ?, ?, ?)",
-                         (equipment_id, location, str(datetime.now()), user_email))
-            conn.commit()
-            st.success("Scan recorded.")
+                conn.execute("""
+                    INSERT INTO scanned_items (equipment_id, location, timestamp, scanned_by) 
+                    VALUES (?, ?, ?, ?)""",
+                    (equipment_id, location, str(datetime.now()), user_email))
+                conn.commit()
+                st.success("Scan recorded.")
         except Exception as e:
             st.error(f"Failed to save: {e}")
-        finally:
-            conn.close()
-
-        if st.checkbox("🛠 Attach Maintenance Log"):
-            try:
-                conn = sqlite3.connect(db_path)
-                conn.execute("""CREATE TABLE IF NOT EXISTS maintenance_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    equipment_id TEXT,
-                    description TEXT,
-                    date TEXT,
-                    technician TEXT,
-                    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )""")
-                conn.execute("INSERT INTO maintenance_log (equipment_id, description, date, technician) VALUES (?, ?, ?, ?)",
-                             (equipment_id, "Scanned and added via barcode page", str(datetime.today().date()), user_email))
-                conn.commit()
-                st.success("Maintenance log entry added.")
-            except Exception as e:
-                st.error(f"Failed to log maintenance: {e}")
-            finally:
-                conn.close()
 
 # --- Scan Log ---
 st.markdown("### 📋 Scan Log & Analytics")
-with sqlite3.connect(db_path) as conn:
-    scan_df = pd.read_sql("SELECT * FROM scanned_items ORDER BY timestamp DESC", conn)
+scan_df = su.load_table(db_path, "scanned_items")
 
 # --- Filters ---
 filter_col1, filter_col2 = st.columns(2)
