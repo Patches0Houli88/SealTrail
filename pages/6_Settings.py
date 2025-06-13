@@ -1,69 +1,47 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
+import shared_utils as su
+import yaml
 import os
-from datetime import datetime
 
-st.set_page_config(page_title="🔎 Global Search", layout="wide")
-st.title("🔎 Equipment Global Search")
+st.set_page_config(page_title="⚙️ Maintenance Settings", layout="wide")
+st.title("Maintenance Interval Settings")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-db_path = st.session_state.get("db_path", None)
-active_table = st.session_state.get("active_table", "equipment")
+db_path = su.get_db_path()
+active_table = su.get_active_table()
 
-st.sidebar.markdown(f"🔐 Role: {user_role} | 📧 Email: {user_email}")
-st.sidebar.info(f"📦 Active Table: `{active_table}`")
+st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.info(f"Active Table: `{active_table}`")
 
-if not db_path or not os.path.exists(db_path):
-    st.error("No active database found.")
+# --- Load Equipment Data
+equipment_df = su.load_equipment()
+type_col = su.get_type_column(equipment_df)
+
+if not type_col:
+    st.warning("No 'equipment_type' or 'type' column found in your active table.")
     st.stop()
 
-# --- Load Data
-conn = sqlite3.connect(db_path)
+types = equipment_df[type_col].dropna().astype(str).str.strip().unique().tolist()
 
-# Equipment Table
-try:
-    equipment_df = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
-    id_col = next((col for col in equipment_df.columns if col.lower() in ["equipment_id", "asset_id"]), None)
-    if id_col:
-        equipment_df[id_col] = equipment_df[id_col].astype(str).str.strip()
-except:
-    equipment_df = pd.DataFrame()
+# --- Load YAML Settings ---
+settings = su.load_settings_yaml()
+if active_table not in settings:
+    settings[active_table] = {}
 
-# Maintenance Table
-try:
-    maintenance_df = pd.read_sql_query("SELECT * FROM maintenance_log", conn)
-except:
-    maintenance_df = pd.DataFrame()
+# --- Settings Form ---
+st.subheader("Configure Maintenance Intervals (days)")
 
-# Scanned Table
-try:
-    scans_df = pd.read_sql_query("SELECT * FROM scanned_items", conn)
-except:
-    scans_df = pd.DataFrame()
+with st.form("settings_form"):
+    for t in types:
+        current = settings[active_table].get(t, 90)
+        settings[active_table][t] = st.number_input(
+            f"Interval for '{t}' (days):", min_value=1, max_value=365, value=current, key=f"setting_{t}"
+        )
+    submitted = st.form_submit_button("💾 Save Settings")
 
-conn.close()
-
-# --- Search Input
-st.subheader("🔎 Search Across All Data")
-search_term = st.text_input("Enter search term (equipment ID, type, description, etc):")
-
-# --- Equipment Search
-if not equipment_df.empty:
-    st.markdown("### 📦 Inventory Matches")
-    mask = equipment_df.apply(lambda row: row.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
-    st.dataframe(equipment_df[mask], use_container_width=True)
-
-# --- Maintenance Search
-if not maintenance_df.empty:
-    st.markdown("### 🛠 Maintenance Matches")
-    mask = maintenance_df.apply(lambda row: row.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
-    st.dataframe(maintenance_df[mask], use_container_width=True)
-
-# --- Scans Search
-if not scans_df.empty:
-    st.markdown("### 📷 Scans Matches")
-    mask = scans_df.apply(lambda row: row.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
-    st.dataframe(scans_df[mask], use_container_width=True)
+if submitted:
+    su.save_settings_yaml(settings)
+    st.success("✅ Settings saved successfully.")
