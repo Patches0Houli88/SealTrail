@@ -26,6 +26,9 @@ st.subheader("Global Search")
 search_term = st.text_input("Enter keyword to search across all tables:")
 
 if search_term:
+    # Audit log for search
+    su.log_audit(db_path, user_email, "Global Search", f"Searched for: '{search_term}'")
+    
     st.markdown("### Search Results:")
     found_any = False
 
