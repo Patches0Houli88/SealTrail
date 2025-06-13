@@ -101,3 +101,5 @@ if status_filter != "All":
     }
     filtered_df = result_df[result_df["Predicted Status"].str.startswith(emoji_map[status_filter])]
     st.dataframe(filtered_df, use_container_width=True)
+
+su.log_audit(db_path, user_email, "Run Predictive Maintenance", f"Generated predictions for {len(result_df)} records")
