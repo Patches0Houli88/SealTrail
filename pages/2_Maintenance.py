@@ -2,46 +2,38 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
-from shared_utils import (
-    load_connection, load_table, get_active_table, get_db_path, get_id_column, log_audit
-)
+import shared_utils as su
 
-st.set_page_config(page_title="Maintenance Log", layout="wide")
+st.set_page_config(page_title="🛠 Maintenance Log", layout="wide")
 st.title("🛠 Maintenance Log")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
 user_role = st.session_state.get("user_role", "guest")
-st.sidebar.markdown(f"🔐 Role: {user_role}  \n📧 Email: {user_email}")
+db_path = su.get_db_path()
+active_table = su.get_active_table()
 
-db_path = get_db_path()
-active_table = get_active_table()
+st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
+st.sidebar.info(f"Active Table: `{active_table}`")
 
-# --- Load Maintenance Log ---
-df = load_table("maintenance_log")
-if not df.empty:
-    st.subheader("Maintenance History")
-    st.dataframe(df, use_container_width=True)
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
+# --- Load Data ---
+equipment_df = su.load_equipment()
+maintenance_df = su.load_maintenance()
+
+# --- Maintenance Log Display ---
+if not maintenance_df.empty:
+    st.subheader("🧾 Maintenance History")
+    st.dataframe(maintenance_df, use_container_width=True)
+    csv = maintenance_df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download Maintenance Log", csv, "maintenance_log.csv", mime="text/csv")
 else:
     st.info("No maintenance records yet.")
 
-# --- Load Equipment Options ---
-item_options = []
-try:
-    df_equipment = load_table(active_table)
-    id_col = get_id_column(df_equipment)
-    if id_col:
-        df_equipment["equipment_id"] = df_equipment[id_col].astype(str).str.strip()
-        df_equipment["display"] = df_equipment["equipment_id"]
-        if "name" in df_equipment.columns:
-            df_equipment["display"] += " - " + df_equipment["name"].astype(str)
-        item_options = df_equipment["display"].tolist()
-except Exception as e:
-    st.warning(f"⚠️ Could not load equipment: {e}")
+# --- Equipment ID Options ---
+id_col = su.get_id_column(equipment_df)
+item_options = equipment_df[id_col].dropna().astype(str).tolist()
 
-# --- Add Maintenance Record ---
+# --- Add Maintenance Entry ---
 st.subheader("➕ Add Maintenance Record")
 
 with st.form("maintenance_entry_form"):
@@ -49,8 +41,7 @@ with st.form("maintenance_entry_form"):
 
     equipment_id = ""
     if input_mode == "Dropdown" and item_options:
-        selected_equipment = st.selectbox("Choose Equipment", item_options)
-        equipment_id = selected_equipment.split(" - ")[0].strip()
+        equipment_id = st.selectbox("Choose Equipment", item_options)
     elif input_mode == "Manual Entry":
         equipment_id = st.text_input("Enter Equipment ID Manually").strip()
 
@@ -62,7 +53,7 @@ with st.form("maintenance_entry_form"):
 
 if submit_log and equipment_id and description:
     try:
-        with load_connection() as conn:
+        with su.load_connection() as conn:
             # Ensure table exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS maintenance_log (
@@ -74,30 +65,26 @@ if submit_log and equipment_id and description:
                     logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-
-            # Insert maintenance log
             conn.execute("""
                 INSERT INTO maintenance_log (equipment_id, description, date, technician) 
                 VALUES (?, ?, ?, ?)
             """, (equipment_id, description, str(date_performed), technician))
 
-            # Update last_maintenance_date in equipment table
-            df_equipment = pd.read_sql(f"SELECT * FROM {active_table}", conn)
-            id_col = get_id_column(df_equipment)
-            if id_col:
+            # Update last_maintenance_date in main equipment table
+            df_equipment = pd.read_sql_query(f"SELECT * FROM {active_table}", conn)
+            id_column = su.get_id_column(df_equipment)
+            if id_column:
                 if "last_maintenance_date" not in df_equipment.columns:
                     conn.execute(f"ALTER TABLE {active_table} ADD COLUMN last_maintenance_date TEXT")
                 conn.execute(f"""
                     UPDATE {active_table}
                     SET last_maintenance_date = ?
-                    WHERE LOWER({id_col}) = LOWER(?)
+                    WHERE LOWER({id_column}) = LOWER(?)
                 """, (str(date_performed), equipment_id))
 
             conn.commit()
 
-            # --- Audit log entry ---
-            log_audit(db_path, user_email, "Add Maintenance", f"{equipment_id}: {description} ({date_performed})")
-
-            st.success("✅ Maintenance record added.")
+        su.log_audit("Add Maintenance", f"Logged maintenance for equipment {equipment_id}")
+        st.success("✅ Maintenance record added.")
     except Exception as e:
         st.error(f"❌ Error saving record: {e}")
