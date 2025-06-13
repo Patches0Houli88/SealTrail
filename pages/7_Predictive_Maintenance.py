@@ -13,7 +13,7 @@ user_role = st.session_state.get("user_role", "guest")
 db_path = su.get_db_path()
 active_table = su.get_active_table()
 
-st.sidebar.markdown(f"Role: {user_role} | 📧 Email: {user_email}")
+st.sidebar.markdown(f"Role: {user_role}  \n📧 Email: {user_email}")
 st.sidebar.info(f"Active Table: `{active_table}`")
 
 # --- Load Data using centralized shared_utils ---
@@ -76,7 +76,7 @@ for _, row in equipment_df.iterrows():
 
 # --- Display ---
 result_df = pd.DataFrame(results)
-st.subheader("📊 Predictive Maintenance Table")
+st.subheader("Predictive Maintenance Table")
 st.dataframe(result_df, use_container_width=True)
 
 # --- Filters ---
@@ -89,4 +89,4 @@ if status_filter != "All":
     st.dataframe(filtered_df, use_container_width=True)
 
 # ✅ Log audit entry
-su.log_audit("Viewed Predictive Maintenance")
+su.log_audit("View Predictive Maintenance")
