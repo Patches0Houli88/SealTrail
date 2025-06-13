@@ -44,4 +44,6 @@ with st.form("settings_form"):
 
 if submitted:
     su.save_settings_yaml(settings)
+    # Log audit when settings are updated
+    su.log_audit(db_path, user_email, "Update Settings", f"Updated maintenance intervals for table: {active_table}")
     st.success("✅ Settings saved successfully.")
