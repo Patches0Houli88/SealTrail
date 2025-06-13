@@ -5,7 +5,7 @@ from datetime import datetime
 import shared_utils as su
 
 st.set_page_config(page_title="Global Search & Filters", layout="wide")
-st.title("🔎 Global Search & Filters")
+st.title("Global Search & Filters")
 
 # --- Session Info ---
 user_email = st.session_state.get("user_email", "unknown@example.com")
@@ -22,7 +22,7 @@ maintenance_df = su.load_maintenance()
 scans_df = su.load_scans()
 
 # --- Global Search ---
-st.subheader("🔍 Global Search")
+st.subheader("Global Search")
 search_term = st.text_input("Enter keyword to search across all tables:")
 
 if search_term:
