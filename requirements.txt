@@ -1,10 +1,11 @@
 streamlit
-pandas
+numpy==2.2.2
+pandas==2.2.3
+opencv-python-headless==4.12.0.88
 PyYAML
 fpdf==1.7.2
 altair
 qrcode
 pyzbar
-opencv-python-headless
 streamlit-qrcode-scanner
 streamlit-webrtc
