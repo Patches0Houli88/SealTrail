@@ -1,12 +1,25 @@
-# -----------------------------
-# 📄 main.py
-# -----------------------------
 import streamlit as st
 import os
 import pandas as pd
 import sqlite3
 import yaml
 
+# --- Auth compatibility shim: replace legacy st.user usage ---
+def _attach_user():
+    class _User:
+        @property
+        def is_logged_in(self):
+            # Treat Streamlit Authenticator's flag as the source of truth
+            return bool(st.session_state.get("authentication_status", False))
+        @property
+        def name(self):
+            return st.session_state.get("name") or st.session_state.get("username")
+        @property
+        def role(self):
+            return st.session_state.get("role", "admin")
+    st.user = _User()
+
+_attach_user()
 # --- Native Login ---
 if not st.user.is_logged_in:
     st.button("Log in with Google", on_click=st.login)
